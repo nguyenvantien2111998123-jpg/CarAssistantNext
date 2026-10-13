@@ -2,6 +2,10 @@
 
 package com.carassistant.next;
 
+import android.hardware.display.DisplayManager;
+import android.os.Build;
+import android.view.Display;
+
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
