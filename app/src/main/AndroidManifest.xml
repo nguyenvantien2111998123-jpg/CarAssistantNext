@@ -1,6 +1,9 @@
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
+    <uses-permission
+        android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+    <uses-permission
+        android:name="androidx.car.app.ACCESS_SURFACE" />
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -13,7 +16,24 @@
         android:label="CarAssistantNext"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
 
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
+
+        <service
+            android:name=".P2ASurfaceProbeService"
+            android:exported="true">
+            <intent-filter>
+                <action
+                    android:name="androidx.car.app.CarAppService" />
+                <category
+                    android:name="androidx.car.app.category.NAVIGATION" />
+            </intent-filter>
+        </service>
         <activity
             android:name=".HomeActivity"
             android:exported="true">
