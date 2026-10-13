@@ -1,0 +1,65 @@
+
+
+name: Patch P2A Android Auto Surface Probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/map-projection-prototype
+    paths:
+      - 'app/**'
+      - '.github/workflows/patch-p2a-android-auto-surface-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-p2a-probe:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Verify P2A patch files
+        run: |
+          test -f app/src/main/java/com/carassistant/next/P2ASurfaceProbeService.java
+          test -f app/src/main/java/com/carassistant/next/P2ASurfaceProbeSession.java
+          test -f app/src/main/java/com/carassistant/next/P2ASurfaceProbeScreen.java
+          grep -q 'androidx.car.app:app:1.7.0' app/build.gradle
+          grep -q 'P2ASurfaceProbeService' app/src/main/AndroidManifest.xml
+          test -f app/src/main/res/xml/automotive_app_desc.xml
+
+      - name: Build debug APK
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Calculate APK SHA-256
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload P2A probe APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistantNext-p2a-surface-probe
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
