@@ -111,10 +111,10 @@ public final class LauncherShellView extends LinearLayout {
         bar.addView(spacer,
                 new LayoutParams(1, 0, 1f));
 
+       
         addTool(bar, android.R.drawable.ic_menu_preferences,
-                "Settings", () -> showPlaceholder(
-                        "Cài đặt",
-                        "Các thiết lập nâng cao sẽ được phát triển sau."));
+                "Settings", this::showProjectionDiagnostics);
+
     }
 
     private void addTool(
