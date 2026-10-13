@@ -69,19 +69,6 @@ public final class LauncherShellView extends LinearLayout {
         buildHomePage();
         showHome();
 
-        LinearLayout bottom = new LinearLayout(context);
-        bottom.setGravity(Gravity.CENTER);
-        bottom.setBackgroundColor(PANEL);
-        bottom.setPadding(dp(4), dp(4), dp(4), dp(4));
-
-        right.addView(bottom,
-                new LayoutParams(LayoutParams.MATCH_PARENT, dp(48)));
-
-        addBottomItem(bottom, "Trang chủ", () -> showHome());
-        addBottomItem(bottom, "Ứng dụng", () -> showAppsPage());
-        addBottomItem(bottom, "Trợ lý", () -> showPlaceholder(
-                "Trợ lý giọng nói",
-                "Sẽ phát triển ở giai đoạn sau."));
     }
 
     private void buildLeftBar() {
