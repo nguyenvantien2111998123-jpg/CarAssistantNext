@@ -4,7 +4,7 @@ package com.carassistant.next;
 
 import androidx.annotation.NonNull;
 import androidx.car.app.CarAppService;
-import androidx.car.app.HostValidator;
+import androidx.car.app.validation.HostValidator;
 import androidx.car.app.Session;
 import androidx.car.app.SessionInfo;
 
