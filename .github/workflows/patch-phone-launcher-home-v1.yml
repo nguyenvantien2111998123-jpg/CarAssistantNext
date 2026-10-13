@@ -1,0 +1,336 @@
+
+name: CarAssistantNext - Phone Launcher A1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phone-launcher-a1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-phone-launcher:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout Core
+        uses: actions/checkout@v4
+
+      - name: Verify protected baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_blob() {
+              expected="$1"
+              path="$2"
+              test -f "$path"
+              actual="$(git hash-object "$path")"
+              if [ "$actual" != "$expected" ]; then
+                  echo "::error::Protected SHA mismatch: $path"
+                  echo "Expected: $expected"
+                  echo "Actual: $actual"
+                  exit 1
+              fi
+              echo "PASS protected: $path"
+          }
+          check_blob d8ddc5abcd112b233e59cd7898efab51045bea50 \
+            app/src/main/java/com/carassistant/next/LauncherShellView.java
+          check_blob ca8120b7ad136026caff184a7471914dafbfa708 \
+            app/src/main/java/com/carassistant/next/HomeActivity.java
+          check_blob 30260c84184e972c77b9a2ba583ab0f72d44d197 \
+            app/src/main/AndroidManifest.xml
+          check_blob c1701bc98aba06cc64292d560f0aaa10e64b622b \
+            app/build.gradle
+          check_blob 0e224a8ce0f6f9300d357bb9ad305f82b4cd7dde \
+            .github/workflows/build-carassistant-next-core.yml
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Add isolated phone launcher activity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          manifest = Path("app/src/main/AndroidManifest.xml")
+          text = manifest.read_text(encoding="utf-8")
+          query_anchor = """
+              <queries>
+          """
+          query_addition = """
+              <intent>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+              </intent>
+          """
+          if text.count(query_anchor) != 1:
+              raise SystemExit("FAIL: queries anchor not unique")
+          if "com.carassistant.next.PhoneLauncherActivity" in text:
+              raise SystemExit("FAIL: launcher patch already applied")
+          text = text.replace(
+              query_anchor,
+              query_anchor + query_addition,
+              1
+          )
+          activity = """
+              <activity android:name=".PhoneLauncherActivity"
+                  android:label="CarAssistantNext"
+                  android:exported="true">
+                  <intent-filter>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.HOME" />
+                      <category android:name="android.intent.category.DEFAULT" />
+                  </intent-filter>
+              </activity>
+          """
+          anchor = "    </application>"
+          if text.count(anchor) != 1:
+              raise SystemExit("FAIL: application closing anchor not unique")
+          text = text.replace(anchor, activity + "\n" + anchor, 1)
+          manifest.write_text(text, encoding="utf-8")
+          print("PASS: HOME activity and launcher visibility query added")
+          PY
+          
+          mkdir -p app/src/main/java/com/carassistant/next
+          cat > app/src/main/java/com/carassistant/next/PhoneLauncherActivity.java <<'JAVA'
+          package com.carassistant.next;
+
+          import android.app.Activity;
+          import android.app.role.RoleManager;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.GridLayout;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+          import java.util.Collections;
+          import java.util.Comparator;
+          import java.util.List;
+
+          public final class PhoneLauncherActivity extends Activity {
+              private final int bg = Color.rgb(17, 23, 31);
+              private final int panel = Color.rgb(29, 39, 51);
+              private final int white = Color.WHITE;
+              private final int muted = Color.rgb(175, 188, 202);
+              private LinearLayout root;
+              private GridLayout grid;
+              private TextView count;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  buildUi();
+                  loadApps();
+              }
+
+              private int dp(float value) {
+                  return Math.round(value * getResources().getDisplayMetrics().density);
+              }
+
+              private GradientDrawable rounded(int color) {
+                  GradientDrawable d = new GradientDrawable();
+                  d.setColor(color);
+                  d.setCornerRadius(dp(14));
+                  return d;
+              }
+
+              private TextView text(String value, float size, int color) {
+                  TextView v = new TextView(this);
+                  v.setText(value);
+                  v.setTextSize(size);
+                  v.setTextColor(color);
+                  return v;
+              }
+
+              private void buildUi() {
+                  root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(dp(16), dp(18), dp(16), dp(8));
+                  root.setBackgroundColor(bg);
+
+                  TextView title = text("CarAssistantNext", 25, white);
+                  title.setTypeface(null, Typeface.BOLD);
+                  root.addView(title);
+
+                  TextView subtitle = text("Màn hình chính điện thoại", 14, muted);
+                  LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
+                  sp.topMargin = dp(5);
+                  root.addView(subtitle, sp);
+
+                  Button makeDefault = new Button(this);
+                  makeDefault.setText("Đặt làm launcher mặc định");
+                  makeDefault.setAllCaps(false);
+                  LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, dp(50));
+                  bp.topMargin = dp(14);
+                  root.addView(makeDefault, bp);
+                  makeDefault.setOnClickListener(v -> requestDefault());
+
+                  count = text("Ứng dụng đã cài", 14, muted);
+                  LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+                  cp.topMargin = dp(14);
+                  cp.bottomMargin = dp(8);
+                  root.addView(count, cp);
+
+                  ScrollView scroll = new ScrollView(this);
+                  root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+                  grid = new GridLayout(this);
+                  grid.setColumnCount(4);
+                  grid.setUseDefaultMargins(false);
+                  scroll.addView(grid);
+
+                  TextView footer = text("A1 · Phone Launcher · CarAssistantNext", 11, muted);
+                  footer.setGravity(Gravity.CENTER);
+                  root.addView(footer, new LinearLayout.LayoutParams(-1, dp(28)));
+
+                  setContentView(root);
+              }
+
+              private void requestDefault() {
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      RoleManager roles = getSystemService(RoleManager.class);
+                      if (roles != null && roles.isRoleAvailable(RoleManager.ROLE_HOME)) {
+                          if (roles.isRoleHeld(RoleManager.ROLE_HOME)) {
+                              Toast.makeText(this, "CarAssistantNext đang là launcher mặc định", Toast.LENGTH_LONG).show();
+                              return;
+                          }
+                          startActivityForResult(roles.createRequestRoleIntent(RoleManager.ROLE_HOME), 1001);
+                          return;
+                      }
+                  }
+                  Intent home = new Intent(Intent.ACTION_MAIN);
+                  home.addCategory(Intent.CATEGORY_HOME);
+                  startActivity(home);
+                  Toast.makeText(this, "Chọn CarAssistantNext rồi chọn Luôn luôn", Toast.LENGTH_LONG).show();
+              }
+
+              private void loadApps() {
+                  grid.removeAllViews();
+                  Intent query = new Intent(Intent.ACTION_MAIN);
+                  query.addCategory(Intent.CATEGORY_LAUNCHER);
+                  PackageManager pm = getPackageManager();
+                  List<ResolveInfo> apps = pm.queryIntentActivities(query, 0);
+                  Collections.sort(apps, new Comparator<ResolveInfo>() {
+                      @Override
+                      public int compare(ResolveInfo a, ResolveInfo b) {
+                          return a.loadLabel(pm).toString().compareToIgnoreCase(
+                              b.loadLabel(pm).toString());
+                      }
+                  });
+                  count.setText("Ứng dụng (" + apps.size() + ")");
+                  int cellWidth = getResources().getDisplayMetrics().widthPixels;
+                  int columns = 4;
+                  int available = Math.max(dp(240), cellWidth - dp(32));
+                  int itemWidth = Math.max(dp(64), available / columns);
+
+                  for (ResolveInfo info : apps) {
+                      if (info.activityInfo == null) continue;
+                      String packageName = info.activityInfo.packageName;
+                      String className = info.activityInfo.name;
+                      String label = info.loadLabel(pm).toString();
+
+                      LinearLayout item = new LinearLayout(this);
+                      item.setOrientation(LinearLayout.VERTICAL);
+                      item.setGravity(Gravity.CENTER);
+                      item.setPadding(dp(4), dp(10), dp(4), dp(10));
+                      item.setBackground(rounded(panel));
+                      item.setClickable(true);
+                      item.setFocusable(true);
+                      item.setContentDescription(label);
+
+                      ImageView icon = new ImageView(this);
+                      try {
+                          icon.setImageDrawable(info.loadIcon(pm));
+                      } catch (Exception ignored) {
+                          icon.setImageResource(android.R.drawable.sym_def_app_icon);
+                      }
+                      item.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+                      TextView name = text(label, 11, white);
+                      name.setGravity(Gravity.CENTER);
+                      name.setMaxLines(2);
+                      LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
+                      np.topMargin = dp(6);
+                      item.addView(name, np);
+
+                      GridLayout.LayoutParams gp = new GridLayout.LayoutParams();
+                      gp.width = itemWidth;
+                      gp.height = dp(94);
+                      gp.setMargins(dp(2), dp(2), dp(2), dp(2));
+                      grid.addView(item, gp);
+
+                      item.setOnClickListener(v -> {
+                          Intent launch = new Intent(Intent.ACTION_MAIN);
+                          launch.addCategory(Intent.CATEGORY_LAUNCHER);
+                          launch.setClassName(packageName, className);
+                          launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                          try {
+                              startActivity(launch);
+                          } catch (Exception e) {
+                              Toast.makeText(this, "Không mở được " + label, Toast.LENGTH_SHORT).show();
+                          }
+                      });
+                  }
+              }
+          }
+          JAVA
+
+      - name: Validate patch and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'android.intent.category.HOME' \
+            app/src/main/AndroidManifest.xml
+          grep -Fq 'android.intent.category.DEFAULT' \
+            app/src/main/AndroidManifest.xml
+          grep -Fq 'PhoneLauncherActivity' \
+            app/src/main/AndroidManifest.xml
+          grep -Fq 'RoleManager.ROLE_HOME' \
+            app/src/main/java/com/carassistant/next/PhoneLauncherActivity.java
+          gradle --no-daemon :app:assembleDebug
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          mkdir -p artifacts
+          cp "$APK" artifacts/CarAssistantNext-PhoneLauncher-A1-debug.apk
+          sha256sum artifacts/CarAssistantNext-PhoneLauncher-A1-debug.apk \
+            | tee artifacts/SHA256SUMS.txt
+
+      - name: Upload Phone Launcher A1
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistantNext-PhoneLauncher-A1
+          path: |
+            artifacts/CarAssistantNext-PhoneLauncher-A1-debug.apk
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
