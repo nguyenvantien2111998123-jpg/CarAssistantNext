@@ -16,7 +16,9 @@ defaultConfig {
 
     testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
 }
-
+dependencies {
+implementation 'androidx.car.app:app:1.7.0'
+}
 compileOptions {
     sourceCompatibility JavaVersion.VERSION_17
     targetCompatibility JavaVersion.VERSION_17
