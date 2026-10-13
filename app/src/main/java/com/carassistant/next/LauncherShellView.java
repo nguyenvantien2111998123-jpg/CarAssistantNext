@@ -543,22 +543,6 @@ private void showProjectionDiagnostics() {
         }
     }
 
-    private void addBottomItem(
-            LinearLayout parent, String label, Runnable action) {
-
-        TextView item = new TextView(getContext());
-        item.setText(label);
-        item.setTextColor(WHITE);
-        item.setTextSize(12);
-        item.setGravity(Gravity.CENTER);
-        item.setClickable(true);
-        item.setFocusable(true);
-        item.setOnClickListener(v -> action.run());
-
-        parent.addView(item, new LayoutParams(0,
-                LayoutParams.MATCH_PARENT, 1f));
-    }
-
     private Button makeButton(String text) {
         Button button = new Button(getContext());
         button.setText(text);
