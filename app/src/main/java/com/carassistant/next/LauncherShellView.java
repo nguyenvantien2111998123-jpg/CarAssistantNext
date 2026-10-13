@@ -347,6 +347,75 @@ public final class LauncherShellView extends LinearLayout {
                 LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         refreshSelectedMapLabel();
     }
+       
+private void showProjectionDiagnostics() {
+    PackageManager pm = getContext().getPackageManager();
+
+    boolean supported = pm.hasSystemFeature(
+            PackageManager.FEATURE_ACTIVITIES_ON_SECONDARY_DISPLAYS);
+
+    DisplayManager dm = (DisplayManager) getContext()
+            .getSystemService(Context.DISPLAY_SERVICE);
+
+    Display[] displays = dm == null
+            ? new Display[0]
+            : dm.getDisplays();
+
+    StringBuilder report = new StringBuilder();
+
+    report.append("THIẾT BỊ\n");
+    report.append(Build.MANUFACTURER)
+            .append(" ")
+            .append(Build.MODEL)
+            .append("\n");
+
+    report.append("Android: ")
+            .append(Build.VERSION.RELEASE)
+            .append(" (API ")
+            .append(Build.VERSION.SDK_INT)
+            .append(")\n\n");
+
+    report.append("HỖ TRỢ ACTIVITY TRÊN MÀN HÌNH PHỤ\n");
+    report.append(supported ? "CÓ" : "KHÔNG")
+            .append("\n\n");
+
+    report.append("MÀN HÌNH HỆ THỐNG NHẬN DIỆN\n");
+
+    if (displays.length == 0) {
+        report.append("Không tìm thấy màn hình.\n");
+    } else {
+        for (Display display : displays) {
+            report.append("\nID: ")
+                    .append(display.getDisplayId())
+                    .append("\nTên: ")
+                    .append(display.getName())
+                    .append("\nTrạng thái: ")
+                    .append(display.getState())
+                    .append("\nFlags: ")
+                    .append(display.getFlags())
+                    .append("\n");
+        }
+    }
+
+    report.append("\nLưu ý: kết quả này chưa xác nhận khả năng ");
+    report.append("chiếu ứng dụng bản đồ vào vùng Home.");
+    report.append("\nQuyền root chưa được kiểm tra bởi màn hình này.");
+
+    TextView text = new TextView(getContext());
+    text.setText(report.toString());
+    text.setTextColor(WHITE);
+    text.setTextSize(14);
+    text.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+    ScrollView scroll = new ScrollView(getContext());
+    scroll.addView(text);
+
+    new AlertDialog.Builder(getContext())
+            .setTitle("Chẩn đoán chiếu ứng dụng")
+            .setView(scroll)
+            .setPositiveButton("Đóng", null)
+            .show();
+}
 
     private void showAppsPage() {
         showPlaceholder("Ứng dụng",
