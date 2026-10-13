@@ -403,7 +403,7 @@ private void showProjectionDiagnostics() {
 
     TextView text = new TextView(getContext());
     text.setText(report.toString());
-    text.setTextColor(WHITE);
+    text.setTextColor(android.graphics.Color.BLACK);
     text.setTextSize(14);
     text.setPadding(dp(16), dp(12), dp(16), dp(12));
 
