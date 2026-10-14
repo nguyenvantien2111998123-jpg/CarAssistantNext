@@ -84,7 +84,13 @@ jobs:
 
           mkdir -p "$P/app/src/main/java/com/carassistant/next/mirror0402"
           mkdir -p "$P/app/src/main/res/values"
-
+          mkdir -p "$P/app/src/main/res/xml"
+          cat > "$P/app/src/main/res/xml/automotive_app_desc.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <automotiveApp>
+          <uses name="template" />
+          </automotiveApp>
+          EOF
           cat > "$P/settings.gradle" <<'EOF'
           pluginManagement {
               repositories {
@@ -151,7 +157,13 @@ jobs:
                   android:allowBackup="false"
                   android:label="MIRROR-04D-02"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
+          <meta-data
+              android:name="com.google.android.gms.car.application"
+              android:resource="@xml/automotive_app_desc" />
 
+          <meta-data
+              android:name="androidx.car.app.minCarApiLevel"
+              android:value="1" />
                   <meta-data
                       android:name="androidx.car.app.minCarApiLevel"
                       android:value="1" />
