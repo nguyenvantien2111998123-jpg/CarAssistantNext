@@ -1,0 +1,353 @@
+name: MIRROR-04A - Root AppOps Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-04a-root-appops-probe
+  cancel-in-progress: false
+
+jobs:
+  build-mirror-04a:
+    name: Build and verify MIRROR-04A
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Verify frozen GD01 core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_sha() {
+            local file="$1"
+            local expected="$2"
+            local actual
+
+            test -f "$file"
+            actual="$(git hash-object "$file")"
+            echo "$file: $actual"
+
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::GD01 CORE SHA MISMATCH: $file"
+              exit 1
+            fi
+          }
+
+          check_sha \
+            "app/src/main/java/com/carassistant/next/HookEntry.java" \
+            "667e759417611d6982bb110ef0583f9513db2c63"
+
+          check_sha \
+            "app/src/main/AndroidManifest.xml" \
+            "b23d082324e633bde63f0997e4c90b320f9b69df"
+
+          check_sha \
+            "app/build.gradle" \
+            "7be503b5df091734ea6babd3b0108e220272207b"
+
+          echo "GD01 CORE SHA CHECK: PASS"
+
+      - name: Create isolated MIRROR-04A project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="mirror04a"
+          JAVA="$BASE/app/src/main/java/com/carassistant/next/mirror04a"
+
+          mkdir -p "$JAVA"
+          mkdir -p "$BASE/app/src/main/res/values"
+
+          cat > "$BASE/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "Mirror04ARootAppOpsProbe"
+          include(":app")
+          EOF
+
+          cat > "$BASE/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > "$BASE/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > "$BASE/app/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next.mirror04a'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror04a'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 1
+                  versionName '1.0.0-mirror04a'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > "$BASE/app/src/main/res/values/strings.xml" <<'EOF'
+          <resources>
+              <string name="app_name">MIRROR-04A Root AppOps Probe</string>
+          </resources>
+          EOF
+
+          cat > "$BASE/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <activity
+                      android:name=".ProbeActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$JAVA/ProbeActivity.java" <<'EOF'
+          package com.carassistant.next.mirror04a;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+          import java.nio.charset.StandardCharsets;
+
+          public final class ProbeActivity extends Activity {
+              private static final String TARGET =
+                      "com.carassistant.next.mirror03b";
+
+              private TextView output;
+              private Button runButton;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(24, 24, 24, 24);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-04A\nRoot + AppOps probe");
+                  title.setTextSize(23);
+                  layout.addView(title);
+
+                  TextView explanation = new TextView(this);
+                  explanation.setText(
+                      "\nKiểm tra Root và đặt PROJECT_MEDIA=allow "
+                      + "cho gói MIRROR-03B.\n"
+                      + "Không tự cấp quyền chụp màn hình và không "
+                      + "khởi chạy Android Auto.");
+                  explanation.setTextSize(16);
+                  layout.addView(explanation);
+
+                  runButton = new Button(this);
+                  runButton.setText("CHECK ROOT + SET APPOPS");
+                  layout.addView(runButton);
+
+                  output = new TextView(this);
+                  output.setTextSize(14);
+                  output.setTextIsSelectable(true);
+                  output.setText(
+                      "READY\n"
+                      + "Hãy cài MIRROR-03B trước khi chạy kiểm tra.");
+                  ScrollView scroll = new ScrollView(this);
+                  scroll.addView(output);
+                  LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+                  params.topMargin = 16;
+                  layout.addView(scroll, params);
+
+                  setContentView(layout);
+
+                  runButton.setOnClickListener(v -> runProbe());
+              }
+
+              private void runProbe() {
+                  runButton.setEnabled(false);
+                  output.setText("RUNNING ROOT / APPOPS CHECK...\n");
+
+                  new Thread(() -> {
+                      StringBuilder log = new StringBuilder();
+                      int exitCode = -1;
+
+                      String command =
+                          "set -e; "
+                          + "echo ROOT_UID; id; "
+                          + "echo TARGET_PACKAGE; "
+                          + "P=$(pm path " + TARGET + " 2>&1); "
+                          + "echo \"$P\"; "
+                          + "echo \"$P\" | grep -q '^package:'; "
+                          + "echo SET_PROJECT_MEDIA; "
+                          + "appops set " + TARGET
+                          + " PROJECT_MEDIA allow; "
+                          + "echo VERIFY_PROJECT_MEDIA; "
+                          + "appops get " + TARGET + " PROJECT_MEDIA; "
+                          + "echo APPOPS_COMMANDS_FINISHED";
+
+                      try {
+                          Process process = new ProcessBuilder(
+                                  "su", "-c", command)
+                              .redirectErrorStream(true)
+                              .start();
+
+                          try (BufferedReader reader =
+                                  new BufferedReader(new InputStreamReader(
+                                      process.getInputStream(),
+                                      StandardCharsets.UTF_8))) {
+                              String line;
+                              while ((line = reader.readLine()) != null) {
+                                  log.append(line).append('\n');
+                              }
+                          }
+
+                          exitCode = process.waitFor();
+                      } catch (Throwable error) {
+                          log.append("EXCEPTION: ")
+                              .append(error)
+                              .append('\n');
+                      }
+
+                      final int result = exitCode;
+                      final String details = log.toString();
+
+                      runOnUiThread(() -> {
+                          output.setText(
+                              "EXIT CODE: " + result + "\n\n" + details
+                              + (result == 0
+                                  ? "\nCOMMAND_RESULT: PASS"
+                                  : "\nCOMMAND_RESULT: FAIL"));
+                          runButton.setEnabled(true);
+                      });
+                  }).start();
+              }
+          }
+          EOF
+
+      - name: Build MIRROR-04A APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --no-daemon -p mirror04a :app:assembleDebug
+
+          APK="mirror04a/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/MIRROR-04A-Root-AppOps-Probe.apk
+
+          sha256sum dist/MIRROR-04A-Root-AppOps-Probe.apk \
+            | tee dist/SHA256SUMS.txt
+
+          echo "APK BUILD: PASS"
+
+      - name: Verify APK package and core remains unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="dist/MIRROR-04A-Root-AppOps-Probe.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+
+          "$AAPT" dump badging "$APK" | tee dist/apk-badging.txt
+
+          grep -q \
+            "package: name='com.carassistant.next.mirror04a'" \
+            dist/apk-badging.txt
+
+          echo "MIRROR-04A PACKAGE CHECK: PASS"
+
+          test "$(git hash-object \
+            app/src/main/java/com/carassistant/next/HookEntry.java)" \
+            = "667e759417611d6982bb110ef0583f9513db2c63"
+
+          test "$(git hash-object \
+            app/src/main/AndroidManifest.xml)" \
+            = "b23d082324e633bde63f0997e4c90b320f9b69df"
+
+          test "$(git hash-object app/build.gradle)" \
+            = "7be503b5df091734ea6babd3b0108e220272207b"
+
+          echo "GD01 CORE RECHECK: PASS"
+
+      - name: Upload MIRROR-04A APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-04A-Root-AppOps-Probe
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
