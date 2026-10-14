@@ -1,0 +1,393 @@
+name: MIRROR-04B - MediaProjection Consent Flow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-04b-mediaprojection-consent
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify MIRROR-04B
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install SDK packages
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Verify frozen GD01 core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_sha() {
+            local file="$1"
+            local expected="$2"
+            test -f "$file"
+            local actual
+            actual="$(git hash-object "$file")"
+            echo "$file: $actual"
+            test "$actual" = "$expected" || {
+              echo "::error::GD01 SHA mismatch: $file"
+              exit 1
+            }
+          }
+
+          check_sha \
+            "app/src/main/java/com/carassistant/next/HookEntry.java" \
+            "667e759417611d6982bb110ef0583f9513db2c63"
+
+          check_sha \
+            "app/src/main/AndroidManifest.xml" \
+            "b23d082324e633bde63f0997e4c90b320f9b69df"
+
+          check_sha \
+            "app/build.gradle" \
+            "7be503b5df091734ea6babd3b0108e220272207b"
+
+          echo "GD01 CORE SHA CHECK: PASS"
+
+      - name: Create isolated Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          B=mirror04b
+          J="$B/app/src/main/java/com/carassistant/next/mirror04b"
+          mkdir -p "$J" "$B/app/src/main/res/values" \
+            "$B/app/src/main/res/xml"
+
+          cat > "$B/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Mirror04B"
+          include(":app")
+          EOF
+
+          cat > "$B/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > "$B/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > "$B/app/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.carassistant.next.mirror04b'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror04b'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 1
+                  versionName '1.0.0-mirror04b'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > "$B/app/src/main/res/values/strings.xml" <<'EOF'
+          <resources>
+              <string name="app_name">MIRROR-04B Consent Test</string>
+              <string name="accessibility_description">Assist with the screen capture confirmation after the user requests projection.</string>
+          </resources>
+          EOF
+
+          cat > "$B/app/src/main/res/xml/mirror04b_accessibility.xml" <<'EOF'
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="100"
+              android:canRetrieveWindowContent="true"
+              android:description="@string/accessibility_description"
+              android:accessibilityFlags="flagReportViewIds" />
+          EOF
+
+          cat > "$B/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".ConsentActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".ConsentAccessibilityService"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                      android:exported="false"
+                      android:label="@string/app_name">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/mirror04b_accessibility" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$J/ConsentActivity.java" <<'EOF'
+          package com.carassistant.next.mirror04b;
+
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+
+          public final class ConsentActivity extends Activity {
+              private static final int REQ = 4104;
+              private TextView log;
+
+              @Override public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(24, 24, 24, 24);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-04B\\nMediaProjection Test");
+                  title.setTextSize(23);
+                  title.setGravity(Gravity.CENTER);
+                  root.addView(title);
+
+                  TextView info = new TextView(this);
+                  info.setText(
+                      "Enable the helper first. Then press Request projection. " +
+                      "Android may still require confirmation. This test does " +
+                      "not capture or save screen content.");
+                  info.setTextSize(16);
+                  root.addView(info);
+
+                  Button settings = new Button(this);
+                  settings.setText("1. ENABLE ACCESSIBILITY HELPER");
+                  settings.setOnClickListener(v ->
+                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+                  root.addView(settings);
+
+                  Button request = new Button(this);
+                  request.setText("2. REQUEST PROJECTION");
+                  request.setOnClickListener(v -> {
+                      write("REQUEST_STARTED");
+                      try {
+                          MediaProjectionManager m =
+                              (MediaProjectionManager) getSystemService(
+                                  Context.MEDIA_PROJECTION_SERVICE);
+                          if (m == null) {
+                              write("RESULT: FAIL - manager unavailable");
+                              return;
+                          }
+                          startActivityForResult(m.createScreenCaptureIntent(), REQ);
+                      } catch (Throwable t) {
+                          write("RESULT: FAIL - " + t);
+                      }
+                  });
+                  root.addView(request);
+
+                  log = new TextView(this);
+                  log.setTextIsSelectable(true);
+                  ScrollView scroll = new ScrollView(this);
+                  scroll.addView(log);
+                  root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+                  setContentView(root);
+                  write("APP_READY");
+                  write("PACKAGE=com.carassistant.next.mirror04b");
+                  write("CORE_ISOLATION=ENABLED");
+              }
+
+              @Override protected void onActivityResult(
+                  int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode != REQ) return;
+                  if (resultCode == RESULT_OK && data != null) {
+                      write("MEDIAPROJECTION_CONSENT=GRANTED");
+                      write("RESULT: PASS - Android returned RESULT_OK");
+                      write("CAPTURE_STARTED=NO");
+                  } else {
+                      write("MEDIAPROJECTION_CONSENT=DENIED_OR_CANCELLED");
+                      write("RESULT: NOT_PASS - consent not granted");
+                  }
+              }
+
+              private void write(String s) {
+                  String line = new SimpleDateFormat(
+                      "HH:mm:ss", Locale.US).format(new Date()) + " " + s;
+                  android.util.Log.i("MIRROR-04B", line);
+                  if (log != null) log.append(line + "\\n");
+              }
+          }
+          EOF
+
+          cat > "$J/ConsentAccessibilityService.java" <<'EOF'
+          package com.carassistant.next.mirror04b;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.view.accessibility.AccessibilityNodeInfo;
+          import android.util.Log;
+          import java.util.Locale;
+
+          public final class ConsentAccessibilityService
+              extends AccessibilityService {
+
+              @Override public void onAccessibilityEvent(AccessibilityEvent e) {
+                  if (e == null) return;
+                  int t = e.getEventType();
+                  if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                      t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return;
+
+                  AccessibilityNodeInfo root = getRootInActiveWindow();
+                  if (root == null) return;
+                  try {
+                      if (scan(root, 0))
+                          Log.i("MIRROR-04B-A11Y", "CONSENT_CLICK_ATTEMPTED");
+                  } catch (Throwable ex) {
+                      Log.e("MIRROR-04B-A11Y", "SCAN_ERROR", ex);
+                  } finally {
+                      root.recycle();
+                  }
+              }
+
+              private boolean scan(AccessibilityNodeInfo n, int depth) {
+                  if (n == null || depth > 18) return false;
+                  CharSequence a = n.getText();
+                  CharSequence b = n.getContentDescription();
+                  String s = ((a == null ? "" : a.toString()) + " " +
+                      (b == null ? "" : b.toString()))
+                      .toLowerCase(Locale.ROOT).trim();
+
+                  boolean match = s.equals("start now") ||
+                      s.equals("start recording") ||
+                      s.equals("start casting") ||
+                      s.equals("bắt đầu ngay") ||
+                      s.equals("bắt đầu truyền") ||
+                      s.equals("bắt đầu ghi");
+
+                  if (match && n.isClickable() && n.isEnabled())
+                      return n.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+
+                  for (int i = 0; i < n.getChildCount(); i++) {
+                      AccessibilityNodeInfo c = n.getChild(i);
+                      if (c == null) continue;
+                      boolean clicked = scan(c, depth + 1);
+                      c.recycle();
+                      if (clicked) return true;
+                  }
+                  return false;
+              }
+
+              @Override public void onInterrupt() {
+                  Log.w("MIRROR-04B-A11Y", "INTERRUPTED");
+              }
+          }
+          EOF
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p mirror04b --no-daemon --stacktrace assembleDebug
+          mkdir -p dist
+          cp mirror04b/app/build/outputs/apk/debug/app-debug.apk \
+            dist/MIRROR-04B-MediaProjection-Consent.apk
+          test -s dist/MIRROR-04B-MediaProjection-Consent.apk
+          sha256sum dist/MIRROR-04B-MediaProjection-Consent.apk \
+            | tee dist/SHA256SUMS.txt
+          echo "MIRROR-04B BUILD: PASS"
+
+      - name: Verify package and frozen core
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+            dist/MIRROR-04B-MediaProjection-Consent.apk \
+            | tee dist/apk-badging.txt
+          grep -q "package: name='com.carassistant.next.mirror04b'" \
+            dist/apk-badging.txt
+
+          test "$(git hash-object app/src/main/java/com/carassistant/next/HookEntry.java)" = \
+            "667e759417611d6982bb110ef0583f9513db2c63"
+          test "$(git hash-object app/src/main/AndroidManifest.xml)" = \
+            "b23d082324e633bde63f0997e4c90b320f9b69df"
+          test "$(git hash-object app/build.gradle)" = \
+            "7be503b5df091734ea6babd3b0108e220272207b"
+
+          echo "MIRROR-04B PACKAGE CHECK: PASS"
+          echo "GD01 CORE RECHECK: PASS"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-04B-MediaProjection-Consent
+          path: |
+            dist/MIRROR-04B-MediaProjection-Consent.apk
+            dist/SHA256SUMS.txt
+            dist/apk-badging.txt
+          if-no-files-found: error
+          retention-days: 14
