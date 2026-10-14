@@ -146,7 +146,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
               <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
-
+              <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
               <application
                   android:allowBackup="false"
                   android:label="MIRROR-04D-02"
