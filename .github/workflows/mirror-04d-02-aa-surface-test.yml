@@ -687,13 +687,6 @@ jobs:
                   return new NavigationTemplate.Builder().build();
               }
 
-              @Override
-              public void onStop() {
-                  drawing = false;
-                  handler.removeCallbacks(drawRunnable);
-                  surface = null;
-                  super.onStop();
-              }
           }
           EOF
 
