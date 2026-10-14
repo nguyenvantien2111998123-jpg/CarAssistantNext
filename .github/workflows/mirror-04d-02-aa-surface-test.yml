@@ -559,7 +559,7 @@ jobs:
           import android.graphics.Canvas;
           import android.graphics.Paint;
           import android.graphics.Rect;
-          import android.graphics.Surface;
+          import android.view.Surface;
           import android.os.Handler;
           import android.os.Looper;
 
@@ -567,8 +567,6 @@ jobs:
           import androidx.car.app.Screen;
           import androidx.car.app.SurfaceCallback;
           import androidx.car.app.SurfaceContainer;
-          import androidx.car.app.model.Maneuver;
-          import androidx.car.app.model.NavigationInfo;
           import androidx.car.app.navigation.model.NavigationTemplate;
 
           public class MirrorScreen extends Screen {
