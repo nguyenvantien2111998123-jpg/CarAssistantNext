@@ -1,0 +1,282 @@
+name: MIRROR-01 - Kiem tra Surface
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-01-kiem-tra-surface
+  cancel-in-progress: false
+
+jobs:
+  kiem-tra-surface:
+    name: MIRROR-01 - Build va kiem tra Surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Lay source main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Cai JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cai Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Cai Android platform va build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Cai Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Kiem tra bao ve core GD01
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_sha() {
+            local file="$1"
+            local expected="$2"
+            local actual
+
+            test -f "$file" || {
+              echo "::error::Thieu file core: $file"
+              exit 1
+            }
+
+            actual="$(git hash-object "$file")"
+
+            echo "$file"
+            echo "Expected: $expected"
+            echo "Actual:   $actual"
+
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Core GD01 thay doi. Dung workflow."
+              exit 1
+            fi
+          }
+
+          check_sha \
+            "app/src/main/java/com/carassistant/next/HookEntry.java" \
+            "667e759417611d6982bb110ef0583f9513db2c63"
+
+          check_sha \
+            "app/src/main/AndroidManifest.xml" \
+            "b23d082324e633bde63f0997e4c90b320f9b69df"
+
+          check_sha \
+            "app/build.gradle" \
+            "7be503b5df091734ea6babd3b0108e220272207b"
+
+          echo "CORE GD01: PASS"
+
+      - name: Tao project kiem tra Surface rieng
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p \
+            mirror01-probe/app/src/main/java/com/carassistant/next/mirror01 \
+            mirror01-probe/app/src/main/res/values
+
+          cat > mirror01-probe/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "Mirror01Probe"
+          include(":app")
+          EOF
+
+          cat > mirror01-probe/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > mirror01-probe/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > mirror01-probe/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next.mirror01'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror01'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 1
+                  versionName '1.0.0-mirror01'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.car.app:app:1.7.0'
+          }
+          EOF
+
+          cat > mirror01-probe/app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">Mirror01 Surface Test</string>
+          </resources>
+          EOF
+
+          cat > mirror01-probe/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission
+                  android:name="androidx.car.app.ACCESS_SURFACE" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <meta-data
+                      android:name="androidx.car.app.minCarApiLevel"
+                      android:value="1" />
+
+                  <service
+                      android:name=".Mirror01CarAppService"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action
+                              android:name="androidx.car.app.CarAppService" />
+                          <category
+                              android:name="androidx.car.app.category.NAVIGATION" />
+                      </intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > mirror01-probe/app/src/main/java/com/carassistant/next/mirror01/Mirror01CarAppService.java <<'EOF'
+          package com.carassistant.next.mirror01;
+
+          import androidx.car.app.CarAppService;
+          import androidx.car.app.Session;
+          import androidx.car.app.validation.HostValidator;
+
+          public final class Mirror01CarAppService extends CarAppService {
+              @Override
+              public HostValidator createHostValidator() {
+                  return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR;
+              }
+
+              @Override
+              public Session onCreateSession() {
+                  return new Mirror01Session();
+              }
+          }
+          EOF
+
+          cat > mirror01-probe/app/src/main/java/com/carassistant/next/mirror01/Mirror01Session.java <<'EOF'
+          package com.carassistant.next.mirror01;
+
+          import androidx.car.app.Screen;
+          import androidx.car.app.Session;
+          import androidx.car.app.CarContext;
+
+          public final class Mirror01Session extends Session {
+              @Override
+              public Screen onCreateScreen(
+                      androidx.car.app.serialization.BundlerIntent intent) {
+                  return new Mirror01Screen(getCarContext());
+              }
+          }
+          EOF
+
+          cat > mirror01-probe/app/src/main/java/com/carassistant/next/mirror01/Mirror01Screen.java <<'EOF'
+          package com.carassistant.next.mirror01;
+
+          import androidx.car.app.CarContext;
+          import androidx.car.app.Screen;
+          import androidx.car.app.model.MessageTemplate;
+          import androidx.car.app.model.Action;
+          import androidx.car.app.model.Template;
+
+          public final class Mirror01Screen extends Screen {
+              public Mirror01Screen(CarContext context) {
+                  super(context);
+              }
+
+              @Override
+              public Template onGetTemplate() {
+                  return new MessageTemplate.Builder(
+                      "MIRROR-01 build probe. Surface va thao tac tren xe can duoc kiem tra thuc te.")
+                      .setTitle("MIRROR-01")
+                      .setHeaderAction(Action.APP_ICON)
+                      .build();
+              }
+          }
+          EOF
+
+      - name: Build APK kiem tra
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --no-daemon \
+            -p mirror01-probe \
+            :app:assembleDebug
+
+          APK="mirror01-probe/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p output
+          cp "$APK" output/MIRROR-01-Kiem-tra-Surface.apk
+
+          sha256sum output/MIRROR-01-Kiem-tra-Surface.apk \
+            | awk '{print $1 "  MIRROR-01-Kiem-tra-Surface.apk"}' \
+            > output/MIRROR-01-SHA256.txt
+
+      - name: Luu APK va SHA256
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-01-Kiem-tra-Surface
+          path: |
+            output/MIRROR-01-Kiem-tra-Surface.apk
+            output/MIRROR-01-SHA256.txt
+          if-no-files-found: error
+          retention-days: 14
