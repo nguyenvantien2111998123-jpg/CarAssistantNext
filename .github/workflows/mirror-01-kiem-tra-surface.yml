@@ -1,4 +1,4 @@
-name: MIRROR-01 - Kiem tra Surface
+name: MIRROR-01A - Launcher va Car App
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   kiem-tra-surface:
-    name: MIRROR-01 - Build va kiem tra Surface
+    name: MIRROR-01A - Build va kiem tra dang ky
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -86,14 +86,15 @@ jobs:
 
           echo "CORE GD01: PASS"
 
-      - name: Tao project kiem tra Surface rieng
+      - name: Tao project MIRROR-01A rieng
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p \
             mirror01-probe/app/src/main/java/com/carassistant/next/mirror01 \
-            mirror01-probe/app/src/main/res/values
+            mirror01-probe/app/src/main/res/values \
+            mirror01-probe/app/src/main/res/xml
 
           cat > mirror01-probe/settings.gradle <<'EOF'
           pluginManagement {
@@ -140,8 +141,8 @@ jobs:
                   applicationId 'com.carassistant.next.mirror01'
                   minSdk 29
                   targetSdk 32
-                  versionCode 1
-                  versionName '1.0.0-mirror01'
+                  versionCode 2
+                  versionName '1.0.1-mirror01a'
               }
 
               compileOptions {
@@ -157,8 +158,14 @@ jobs:
 
           cat > mirror01-probe/app/src/main/res/values/strings.xml <<'EOF'
           <resources>
-              <string name="app_name">Mirror01 Surface Test</string>
+              <string name="app_name">MIRROR-01A Launcher Test</string>
           </resources>
+          EOF
+
+          cat > mirror01-probe/app/src/main/res/xml/automotive_app_desc.xml <<'EOF'
+          <automotiveApp xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses name="template" />
+          </automotiveApp>
           EOF
 
           cat > mirror01-probe/app/src/main/AndroidManifest.xml <<'EOF'
@@ -173,22 +180,83 @@ jobs:
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
                   <meta-data
-                      android:name="androidx.car.app.minCarApiLevel"
-                      android:value="1" />
+                      android:name="com.google.android.gms.car.application"
+                      android:resource="@xml/automotive_app_desc" />
+
+                  <activity
+                      android:name=".Mirror01HomeActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
 
                   <service
                       android:name=".Mirror01CarAppService"
                       android:exported="true">
-
                       <intent-filter>
                           <action
                               android:name="androidx.car.app.CarAppService" />
                           <category
                               android:name="androidx.car.app.category.NAVIGATION" />
                       </intent-filter>
+
+                      <meta-data
+                          android:name="androidx.car.app.minCarApiLevel"
+                          android:value="1" />
                   </service>
               </application>
           </manifest>
+          EOF
+
+          cat > mirror01-probe/app/src/main/java/com/carassistant/next/mirror01/Mirror01HomeActivity.java <<'EOF'
+          package com.carassistant.next.mirror01;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.graphics.Typeface;
+          import android.view.Gravity;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public final class Mirror01HomeActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setGravity(Gravity.CENTER);
+
+                  int padding = (int) (
+                      24 * getResources().getDisplayMetrics().density
+                  );
+                  root.setPadding(padding, padding, padding, padding);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-01A");
+                  title.setTextSize(24);
+                  title.setTypeface(null, Typeface.BOLD);
+                  title.setGravity(Gravity.CENTER);
+
+                  TextView details = new TextView(this);
+                  details.setText(
+                      "Launcher: OK" + System.lineSeparator() +
+                      "Package: com.carassistant.next.mirror01" +
+                      System.lineSeparator() + System.lineSeparator() +
+                      "Day la APK kiem tra dang ky Car App." +
+                      System.lineSeparator() +
+                      "Chua truyen hinh anh dien thoai len xe."
+                  );
+                  details.setTextSize(16);
+                  details.setGravity(Gravity.CENTER);
+
+                  root.addView(title);
+                  root.addView(details);
+                  setContentView(root);
+              }
+          }
           EOF
 
           cat > mirror01-probe/app/src/main/java/com/carassistant/next/mirror01/Mirror01CarAppService.java <<'EOF'
@@ -243,15 +311,16 @@ jobs:
               @Override
               public Template onGetTemplate() {
                   return new MessageTemplate.Builder(
-                      "MIRROR-01 build probe. Surface va thao tac tren xe can duoc kiem tra thuc te.")
-                      .setTitle("MIRROR-01")
+                      "MIRROR-01A: Car App registration test. " +
+                      "Surface va truyen hinh chua duoc kiem tra.")
+                      .setTitle("MIRROR-01A")
                       .setHeaderAction(Action.APP_ICON)
                       .build();
               }
           }
           EOF
 
-      - name: Build APK kiem tra
+      - name: Build APK MIRROR-01A
         shell: bash
         run: |
           set -euo pipefail
@@ -264,18 +333,49 @@ jobs:
           test -s "$APK"
 
           mkdir -p output
-          cp "$APK" output/MIRROR-01-Kiem-tra-Surface.apk
+          cp "$APK" output/MIRROR-01A-Launcher-Test.apk
 
-          sha256sum output/MIRROR-01-Kiem-tra-Surface.apk \
-            | awk '{print $1 "  MIRROR-01-Kiem-tra-Surface.apk"}' \
-            > output/MIRROR-01-SHA256.txt
+          sha256sum output/MIRROR-01A-Launcher-Test.apk \
+            | awk '{print $1 "  MIRROR-01A-Launcher-Test.apk"}' \
+            > output/MIRROR-01A-SHA256.txt
 
-      - name: Luu APK va SHA256
+      - name: Kiem tra Manifest APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="output/MIRROR-01A-Launcher-Test.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+
+          test -x "$AAPT"
+          "$AAPT" dump badging "$APK" | tee output/MIRROR-01A-Badging.txt
+
+          grep -q "com.carassistant.next.mirror01" \
+            output/MIRROR-01A-Badging.txt
+
+          grep -q "launchable-activity" \
+            output/MIRROR-01A-Badging.txt
+
+          "$AAPT" dump xmltree "$APK" \
+            --file AndroidManifest.xml \
+            > output/MIRROR-01A-Manifest.txt
+
+          grep -q "com.google.android.gms.car.application" \
+            output/MIRROR-01A-Manifest.txt
+
+          grep -q "android.intent.category.LAUNCHER" \
+            output/MIRROR-01A-Manifest.txt
+
+          echo "MIRROR-01A APK manifest checks: PASS"
+
+      - name: Luu APK va ket qua kiem tra
         uses: actions/upload-artifact@v4
         with:
-          name: MIRROR-01-Kiem-tra-Surface
+          name: MIRROR-01A-Launcher-Test
           path: |
-            output/MIRROR-01-Kiem-tra-Surface.apk
-            output/MIRROR-01-SHA256.txt
+            output/MIRROR-01A-Launcher-Test.apk
+            output/MIRROR-01A-SHA256.txt
+            output/MIRROR-01A-Badging.txt
+            output/MIRROR-01A-Manifest.txt
           if-no-files-found: error
           retention-days: 14
