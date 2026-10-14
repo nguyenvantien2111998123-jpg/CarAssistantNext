@@ -1,0 +1,365 @@
+name: MIRROR-02 - Surface va quyen Android Auto
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-02-surface-foundation
+  cancel-in-progress: false
+
+jobs:
+  build-mirror-02:
+    name: Build va kiem tra Surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Cai JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cai Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Cai Android platform va build tools
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Cai Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Bao ve core GD01
+        run: |
+          set -euo pipefail
+          check_sha() {
+            actual="$(git hash-object "$1")"
+            echo "$1: $actual"
+            test "$actual" = "$2" || {
+              echo "::error::Core GD01 thay doi: $1"
+              exit 1
+            }
+          }
+          check_sha "app/src/main/java/com/carassistant/next/HookEntry.java" "667e759417611d6982bb110ef0583f9513db2c63"
+          check_sha "app/src/main/AndroidManifest.xml" "b23d082324e633bde63f0997e4c90b320f9b69df"
+          check_sha "app/build.gradle" "7be503b5df091734ea6babd3b0108e220272207b"
+          echo "CORE GD01: PASS"
+
+      - name: Tao project MIRROR-02
+        run: |
+          set -euo pipefail
+          mkdir -p mirror02/app/src/main/java/com/carassistant/next/mirror02
+          mkdir -p mirror02/app/src/main/res/values
+          mkdir -p mirror02/app/src/main/res/xml
+
+          cat > mirror02/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Mirror02Surface"
+          include(":app")
+          EOF
+
+          cat > mirror02/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > mirror02/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > mirror02/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.carassistant.next.mirror02'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror02'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 2
+                  versionName '1.0.2-mirror02'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'androidx.car.app:app:1.7.0'
+          }
+          EOF
+
+          cat > mirror02/app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">MIRROR-02 Surface</string>
+          </resources>
+          EOF
+
+          cat > mirror02/app/src/main/res/xml/automotive_app_desc.xml <<'EOF'
+          <automotiveApp xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses name="template" />
+          </automotiveApp>
+          EOF
+
+          cat > mirror02/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+              <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <meta-data
+                      android:name="com.google.android.gms.car.application"
+                      android:resource="@xml/automotive_app_desc" />
+                  <meta-data
+                      android:name="androidx.car.app.minCarApiLevel"
+                      android:value="1" />
+                  <activity
+                      android:name=".Mirror02HomeActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".Mirror02CarAppService"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="androidx.car.app.CarAppService" />
+                          <category android:name="androidx.car.app.category.NAVIGATION" />
+                      </intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > mirror02/app/src/main/java/com/carassistant/next/mirror02/Mirror02HomeActivity.java <<'EOF'
+          package com.carassistant.next.mirror02;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.widget.TextView;
+
+          public final class Mirror02HomeActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  TextView text = new TextView(this);
+                  text.setGravity(Gravity.CENTER);
+                  text.setTextSize(18);
+                  text.setText("MIRROR-02 Surface\nBuild diagnostic only\nOpen from Android Auto.");
+                  setContentView(text);
+              }
+          }
+          EOF
+
+          cat > mirror02/app/src/main/java/com/carassistant/next/mirror02/Mirror02CarAppService.java <<'EOF'
+          package com.carassistant.next.mirror02;
+
+          import android.util.Log;
+          import androidx.car.app.CarAppService;
+          import androidx.car.app.Session;
+          import androidx.car.app.validation.HostValidator;
+
+          public final class Mirror02CarAppService extends CarAppService {
+              @Override
+              public HostValidator createHostValidator() {
+                  Log.i("MIRROR02", "createHostValidator");
+                  return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR;
+              }
+
+              @Override
+              public Session onCreateSession() {
+                  Log.i("MIRROR02", "onCreateSession");
+                  return new Mirror02Session();
+              }
+          }
+          EOF
+
+          cat > mirror02/app/src/main/java/com/carassistant/next/mirror02/Mirror02Session.java <<'EOF'
+          package com.carassistant.next.mirror02;
+
+          import android.content.Intent;
+          import android.util.Log;
+          import androidx.car.app.Screen;
+          import androidx.car.app.Session;
+
+          public final class Mirror02Session extends Session {
+              @Override
+              public Screen onCreateScreen(Intent intent) {
+                  Log.i("MIRROR02", "onCreateScreen");
+                  return new Mirror02Screen(getCarContext());
+              }
+          }
+          EOF
+
+          cat > mirror02/app/src/main/java/com/carassistant/next/mirror02/Mirror02Screen.java <<'EOF'
+          package com.carassistant.next.mirror02;
+
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.util.Log;
+          import android.view.Surface;
+          import androidx.car.app.AppManager;
+          import androidx.car.app.CarContext;
+          import androidx.car.app.Screen;
+          import androidx.car.app.SurfaceCallback;
+          import androidx.car.app.SurfaceContainer;
+          import androidx.car.app.model.Action;
+          import androidx.car.app.model.ActionStrip;
+          import androidx.car.app.model.Template;
+          import androidx.car.app.navigation.model.NavigationTemplate;
+
+          public final class Mirror02Screen extends Screen {
+              private static final String TAG = "MIRROR02";
+
+              private final SurfaceCallback callback = new SurfaceCallback() {
+                  @Override
+                  public void onSurfaceAvailable(SurfaceContainer container) {
+                      Log.i(TAG, "SURFACE_AVAILABLE "
+                          + container.getWidth() + "x" + container.getHeight());
+                      drawStatus(container.getSurface(),
+                          container.getWidth(), container.getHeight());
+                  }
+
+                  @Override
+                  public void onSurfaceDestroyed(SurfaceContainer container) {
+                      Log.i(TAG, "SURFACE_DESTROYED");
+                  }
+
+                  @Override
+                  public void onClick(float x, float y) {
+                      Log.i(TAG, "SURFACE_CLICK " + x + "," + y);
+                  }
+
+                  @Override
+                  public void onScroll(float dx, float dy) {
+                      Log.i(TAG, "SURFACE_SCROLL " + dx + "," + dy);
+                  }
+              };
+
+              public Mirror02Screen(CarContext context) {
+                  super(context);
+                  Log.i(TAG, "screen constructed");
+                  context.getCarService(AppManager.class)
+                      .setSurfaceCallback(callback);
+              }
+
+              private void drawStatus(Surface surface, int width, int height) {
+                  if (surface == null || !surface.isValid()) {
+                      Log.e(TAG, "surface null or invalid");
+                      return;
+                  }
+                  Canvas canvas = null;
+                  try {
+                      canvas = surface.lockCanvas(null);
+                      canvas.drawColor(Color.rgb(20, 35, 55));
+                      Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                      paint.setColor(Color.WHITE);
+                      paint.setTextAlign(Paint.Align.CENTER);
+                      paint.setTextSize(Math.max(24f, width / 22f));
+                      canvas.drawText("MIRROR-02 SURFACE OK",
+                          width / 2f, height / 2f, paint);
+                      paint.setTextSize(Math.max(14f, width / 42f));
+                      canvas.drawText(width + " x " + height,
+                          width / 2f,
+                          height / 2f + paint.getTextSize() * 1.8f, paint);
+                      surface.unlockCanvasAndPost(canvas);
+                      canvas = null;
+                      Log.i(TAG, "SURFACE_DRAW_OK");
+                  } catch (Throwable error) {
+                      Log.e(TAG, "SURFACE_DRAW_FAILED", error);
+                  } finally {
+                      if (canvas != null) {
+                          try {
+                              surface.unlockCanvasAndPost(canvas);
+                          } catch (Throwable ignored) { }
+                      }
+                  }
+              }
+
+              @Override
+              public Template onGetTemplate() {
+                  Log.i(TAG, "onGetTemplate");
+                  ActionStrip strip = new ActionStrip.Builder()
+                      .addAction(Action.APP_ICON)
+                      .build();
+                  return new NavigationTemplate.Builder()
+                      .setActionStrip(strip)
+                      .withPan()
+                      .build();
+              }
+          }
+          EOF
+
+      - name: Build APK MIRROR-02
+        run: |
+          set -euo pipefail
+          gradle --no-daemon -p mirror02 :app:assembleDebug
+          APK="mirror02/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p output
+          cp "$APK" output/MIRROR-02-Surface.apk
+          sha256sum output/MIRROR-02-Surface.apk > output/MIRROR-02-SHA256.txt
+
+      - name: Kiem tra APK va Manifest
+        run: |
+          set -euo pipefail
+          APK="output/MIRROR-02-Surface.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          "$AAPT" dump badging "$APK" | tee output/MIRROR-02-Badging.txt
+          grep -q "com.carassistant.next.mirror02" output/MIRROR-02-Badging.txt
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > output/MIRROR-02-Manifest.txt
+          grep -q "androidx.car.app.ACCESS_SURFACE" output/MIRROR-02-Manifest.txt
+          grep -q "androidx.car.app.NAVIGATION_TEMPLATES" output/MIRROR-02-Manifest.txt
+          grep -q "androidx.car.app.category.NAVIGATION" output/MIRROR-02-Manifest.txt
+          grep -q "com.google.android.gms.car.application" output/MIRROR-02-Manifest.txt
+          echo "MIRROR-02 manifest checks: PASS"
+
+      - name: Luu artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-02-Surface
+          path: |
+            output/MIRROR-02-Surface.apk
+            output/MIRROR-02-SHA256.txt
+            output/MIRROR-02-Badging.txt
+            output/MIRROR-02-Manifest.txt
+          if-no-files-found: error
+          retention-days: 14
