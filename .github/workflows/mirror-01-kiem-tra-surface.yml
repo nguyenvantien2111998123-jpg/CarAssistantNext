@@ -357,7 +357,7 @@ jobs:
             output/MIRROR-01A-Badging.txt
 
           "$AAPT" dump xmltree "$APK" \
-            --file AndroidManifest.xml \
+            AndroidManifest.xml \
             > output/MIRROR-01A-Manifest.txt
 
           grep -q "com.google.android.gms.car.application" \
