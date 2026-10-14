@@ -633,8 +633,12 @@ jobs:
             out/MIRROR-03A-Fix1-manifest.txt
 
           echo "=== VERIFY MEDIA PROJECTION SERVICE TYPE ==="
-          grep -q 'foregroundServiceType="mediaProjection"' \
-            out/MIRROR-03A-Fix1-manifest.txt
+          echo "=== VERIFY MEDIA PROJECTION SERVICE TYPE ==="
+          grep -Eq 'foregroundServiceType="(mediaProjection|0x20)"' \
+          out/MIRROR-03A-Fix1-manifest.txt
+
+          grep -q "Mirror03AProjectionService" \
+          out/MIRROR-03A-Fix1-manifest.txt
 
           grep -q "Mirror03AProjectionService" \
             out/MIRROR-03A-Fix1-manifest.txt
