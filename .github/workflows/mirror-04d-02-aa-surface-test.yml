@@ -678,20 +678,13 @@ jobs:
                   super(context);
               }
 
-              @Override
+                  @Override
               public androidx.car.app.model.Template onGetTemplate() {
                   getCarContext()
                       .getCarService(androidx.car.app.AppManager.class)
                       .setSurfaceCallback(surfaceCallback);
 
-                  NavigationInfo info = new NavigationInfo.Builder()
-                      .setManeuver(
-                          new Maneuver.Builder(Maneuver.TYPE_STRAIGHT).build())
-                      .build();
-
-                  return new NavigationTemplate.Builder()
-                      .setNavigationInfo(info)
-                      .build();
+                  return new NavigationTemplate.Builder().build();
               }
 
               @Override
