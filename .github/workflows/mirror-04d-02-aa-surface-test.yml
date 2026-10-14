@@ -164,9 +164,6 @@ jobs:
           <meta-data
               android:name="androidx.car.app.minCarApiLevel"
               android:value="1" />
-                  <meta-data
-                      android:name="androidx.car.app.minCarApiLevel"
-                      android:value="1" />
 
                   <activity
                       android:name=".MainActivity"
