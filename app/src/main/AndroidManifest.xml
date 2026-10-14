@@ -1,0 +1,29 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="false"
+        android:label="CarAssistantNext"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:supportsRtl="true">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+
+        <meta-data
+            android:name="xposeddescription"
+            android:value="GD01 - Khoi tao core" />
+
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+
+        <activity
+            android:name=".HomeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
