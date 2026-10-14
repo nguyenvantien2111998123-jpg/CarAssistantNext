@@ -1,0 +1,540 @@
+name: MIRROR-04D - Integrated Projection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-04d-integrated-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Verify frozen GD01
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_sha() {
+            file="$1"
+            expected="$2"
+            if [ ! -f "$file" ]; then
+              echo "::error::Missing protected file: $file"
+              exit 1
+            fi
+            actual="$(sha256sum "$file" | cut -d' ' -f1)"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::GD01 SHA mismatch: $file"
+              echo "Expected: $expected"
+              echo "Actual:   $actual"
+              exit 1
+            fi
+            echo "GD01_SHA_PASS $file $actual"
+          }
+
+          check_sha \
+            app/src/main/java/com/carassistant/next/HookEntry.java \
+            667e759417611d6982bb110ef0583f9513db2c63
+
+          check_sha \
+            app/src/main/AndroidManifest.xml \
+            b23d082324e633bde63f0997e4c90b320f9b69df
+
+          check_sha \
+            app/build.gradle \
+            7be503b5df091734ea6babd3b0108e220272207b
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Create isolated MIRROR-04D project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p mirror04d/app/src/main/java/com/carassistant/next/mirror04d
+          mkdir -p mirror04d/app/src/main/res/xml
+
+          cat > mirror04d/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MIRROR-04D"
+          include(":app")
+          EOF
+
+          cat > mirror04d/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > mirror04d/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > mirror04d/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next.mirror04d'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror04d'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 4
+                  versionName '04D-alpha'
+              }
+          }
+          EOF
+
+          cat > mirror04d/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="MIRROR-04D"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".ProjectionService"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection" />
+
+                  <service
+                      android:name=".DiagnosticAccessibilityService"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                      android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+
+                  <receiver
+                      android:name=".ConnectionReceiver"
+                      android:enabled="true"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                          <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          EOF
+
+          cat > mirror04d/app/src/main/res/xml/accessibility_config.xml <<'EOF'
+          <accessibility-service
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="100"
+              android:canRetrieveWindowContent="false"
+              android:description="@string/accessibility_description" />
+          EOF
+
+          mkdir -p mirror04d/app/src/main/res/values
+          cat > mirror04d/app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="accessibility_description">MIRROR-04D diagnostic helper. Does not automatically approve screen capture.</string>
+          </resources>
+          EOF
+
+          cat > mirror04d/app/src/main/java/com/carassistant/next/mirror04d/FrameStore.java <<'EOF'
+          package com.carassistant.next.mirror04d;
+
+          import android.graphics.Bitmap;
+
+          public final class FrameStore {
+              private FrameStore() {}
+              public static volatile Bitmap latest;
+              public static volatile long frameCount = 0;
+              public static volatile String status = "NOT_STARTED";
+              public static volatile String error = "NONE";
+          }
+          EOF
+
+          cat > mirror04d/app/src/main/java/com/carassistant/next/mirror04d/MainActivity.java <<'EOF'
+          package com.carassistant.next.mirror04d;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              private static final int REQUEST_CAPTURE = 404;
+              private TextView status;
+
+              @Override public void onCreate(Bundle saved) {
+                  super.onCreate(saved);
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(24, 24, 24, 24);
+                  layout.setGravity(Gravity.CENTER_HORIZONTAL);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-04D Integrated Diagnostic");
+                  title.setTextSize(22);
+                  layout.addView(title);
+
+                  status = new TextView(this);
+                  status.setTextSize(16);
+                  status.setPadding(0, 24, 0, 24);
+                  layout.addView(status);
+
+                  Button capture = new Button(this);
+                  capture.setText("1. Request screen capture");
+                  capture.setOnClickListener(v -> {
+                      MediaProjectionManager mgr =
+                          (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                      startActivityForResult(mgr.createScreenCaptureIntent(), REQUEST_CAPTURE);
+                  });
+                  layout.addView(capture);
+
+                  Button diagnostics = new Button(this);
+                  diagnostics.setText("2. Refresh diagnostics");
+                  diagnostics.setOnClickListener(v -> refresh());
+                  layout.addView(diagnostics);
+
+                  Button accessibility = new Button(this);
+                  accessibility.setText("3. Open Accessibility settings");
+                  accessibility.setOnClickListener(v ->
+                      startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+                  layout.addView(accessibility);
+
+                  setContentView(layout);
+                  refresh();
+              }
+
+              @Override protected void onActivityResult(int request, int result, Intent data) {
+                  super.onActivityResult(request, result, data);
+                  if (request != REQUEST_CAPTURE) return;
+                  if (result != RESULT_OK || data == null) {
+                      FrameStore.status = "CONSENT_DENIED";
+                      FrameStore.error = "USER_DID_NOT_GRANT_CAPTURE";
+                      refresh();
+                      return;
+                  }
+
+                  Intent service = new Intent(this, ProjectionService.class);
+                  service.putExtra("resultCode", result);
+                  service.putExtra("resultData", data);
+                  try {
+                      startForegroundService(service);
+                      FrameStore.status = "SERVICE_START_REQUESTED";
+                      FrameStore.error = "NONE";
+                  } catch (Throwable t) {
+                      FrameStore.status = "SERVICE_START_FAILED";
+                      FrameStore.error = t.getClass().getSimpleName() + ": " + t.getMessage();
+                  }
+                  refresh();
+              }
+
+              private void refresh() {
+                  if (status != null) {
+                      status.setText(
+                          "Package: com.carassistant.next.mirror04d\n" +
+                          "Projection: " + FrameStore.status + "\n" +
+                          "Frames: " + FrameStore.frameCount + "\n" +
+                          "Error: " + FrameStore.error + "\n\n" +
+                          "Accessibility helper: enable manually in Android Settings.\n" +
+                          "Root/AppOps: not assumed to grant capture consent.");
+                  }
+              }
+
+              @Override protected void onResume() {
+                  super.onResume();
+                  refresh();
+              }
+          }
+          EOF
+
+          cat > mirror04d/app/src/main/java/com/carassistant/next/mirror04d/ProjectionService.java <<'EOF'
+          package com.carassistant.next.mirror04d;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.content.pm.ServiceInfo;
+          import android.graphics.Bitmap;
+          import android.graphics.PixelFormat;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.media.Image;
+          import android.media.ImageReader;
+          import android.media.projection.MediaProjection;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.util.DisplayMetrics;
+          import android.view.WindowManager;
+
+          import java.nio.ByteBuffer;
+
+          public class ProjectionService extends Service {
+              private MediaProjection projection;
+              private VirtualDisplay display;
+              private ImageReader reader;
+
+              @Override public int onStartCommand(Intent intent, int flags, int id) {
+                  try {
+                      startNotice();
+                      if (intent == null || !intent.hasExtra("resultData")) {
+                          FrameStore.status = "WAITING_FOR_CONSENT_RESULT";
+                          FrameStore.error = "NO_PROJECTION_TOKEN";
+                          return START_NOT_STICKY;
+                      }
+
+                      int resultCode = intent.getIntExtra("resultCode", 0);
+                      Intent resultData = intent.getParcelableExtra("resultData");
+                      if (resultData == null) throw new IllegalStateException("RESULT_DATA_NULL");
+
+                      MediaProjectionManager mgr =
+                          (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                      projection = mgr.getMediaProjection(resultCode, resultData);
+                      if (projection == null) throw new IllegalStateException("PROJECTION_NULL");
+
+                      projection.registerCallback(new MediaProjection.Callback() {
+                          @Override public void onStop() {
+                              FrameStore.status = "PROJECTION_STOPPED";
+                              cleanup();
+                              stopSelf();
+                          }
+                      }, null);
+
+                      DisplayMetrics metrics = new DisplayMetrics();
+                      WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      wm.getDefaultDisplay().getRealMetrics(metrics);
+                      int width = Math.max(1, metrics.widthPixels);
+                      int height = Math.max(1, metrics.heightPixels);
+                      int density = metrics.densityDpi;
+
+                      reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+                      reader.setOnImageAvailableListener(source -> {
+                          Image image = null;
+                          try {
+                              image = source.acquireLatestImage();
+                              if (image == null) return;
+                              Image.Plane plane = image.getPlanes()[0];
+                              ByteBuffer buffer = plane.getBuffer();
+                              int pixelStride = plane.getPixelStride();
+                              int rowStride = plane.getRowStride();
+                              int rowPadding = rowStride - pixelStride * width;
+                              Bitmap padded = Bitmap.createBitmap(
+                                  width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888);
+                              padded.copyPixelsFromBuffer(buffer);
+                              Bitmap cropped = Bitmap.createBitmap(padded, 0, 0, width, height);
+                              Bitmap old = FrameStore.latest;
+                              FrameStore.latest = cropped;
+                              if (old != null && old != cropped) old.recycle();
+                              if (padded != cropped) padded.recycle();
+                              FrameStore.frameCount++;
+                              FrameStore.status = "FRAME_OK";
+                              FrameStore.error = "NONE";
+                          } catch (Throwable t) {
+                              FrameStore.status = "FRAME_ERROR";
+                              FrameStore.error = t.getClass().getSimpleName() + ": " + t.getMessage();
+                          } finally {
+                              if (image != null) image.close();
+                          }
+                      }, null);
+
+                      display = projection.createVirtualDisplay(
+                          "MIRROR-04D",
+                          width,
+                          height,
+                          density,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                          reader.getSurface(),
+                          null,
+                          null);
+                      FrameStore.status = "CAPTURE_STARTED";
+                      FrameStore.error = "NONE";
+                  } catch (Throwable t) {
+                      FrameStore.status = "START_FAILED";
+                      FrameStore.error = t.getClass().getSimpleName() + ": " + t.getMessage();
+                      cleanup();
+                      stopSelf();
+                  }
+                  return START_NOT_STICKY;
+              }
+
+              private void startNotice() {
+                  String channel = "mirror04d";
+                  NotificationManager nm = getSystemService(NotificationManager.class);
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      nm.createNotificationChannel(new NotificationChannel(
+                          channel, "MIRROR-04D", NotificationManager.IMPORTANCE_LOW));
+                  }
+                  Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                      ? new Notification.Builder(this, channel)
+                      : new Notification.Builder(this);
+                  b.setContentTitle("MIRROR-04D")
+                   .setContentText("Projection diagnostic running")
+                   .setSmallIcon(android.R.drawable.ic_menu_view);
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(404, b.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+                  } else {
+                      startForeground(404, b.build());
+                  }
+              }
+
+              private void cleanup() {
+                  try { if (display != null) display.release(); } catch (Throwable ignored) {}
+                  display = null;
+                  try { if (reader != null) reader.close(); } catch (Throwable ignored) {}
+                  reader = null;
+                  try { if (projection != null) projection.stop(); } catch (Throwable ignored) {}
+                  projection = null;
+              }
+
+              @Override public void onDestroy() {
+                  cleanup();
+                  super.onDestroy();
+              }
+
+              @Override public IBinder onBind(Intent intent) { return null; }
+          }
+          EOF
+
+          cat > mirror04d/app/src/main/java/com/carassistant/next/mirror04d/DiagnosticAccessibilityService.java <<'EOF'
+          package com.carassistant.next.mirror04d;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.view.accessibility.AccessibilityEvent;
+
+          public class DiagnosticAccessibilityService extends AccessibilityService {
+              @Override public void onAccessibilityEvent(AccessibilityEvent event) {
+                  FrameStore.error = "ACCESSIBILITY_EVENT_" + event.getEventType();
+              }
+              @Override public void onInterrupt() {
+                  FrameStore.error = "ACCESSIBILITY_INTERRUPTED";
+              }
+          }
+          EOF
+
+          cat > mirror04d/app/src/main/java/com/carassistant/next/mirror04d/ConnectionReceiver.java <<'EOF'
+          package com.carassistant.next.mirror04d;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          public class ConnectionReceiver extends BroadcastReceiver {
+              @Override public void onReceive(Context context, Intent intent) {
+                  if (intent == null || intent.getAction() == null) return;
+                  String action = intent.getAction();
+                  context.getSharedPreferences("mirror04d", Context.MODE_PRIVATE)
+                      .edit().putString("last_broadcast", action).apply();
+                  if (action.endsWith("ACL_CONNECTED")) {
+                      FrameStore.error = "BLUETOOTH_CONNECTED_REQUIRES_USER_START";
+                  } else if (action.endsWith("ACL_DISCONNECTED")) {
+                      FrameStore.error = "BLUETOOTH_DISCONNECTED";
+                  } else if (Intent.ACTION_BOOT_COMPLETED.equals(action)) {
+                      FrameStore.error = "BOOT_RECEIVED_AUTOSTART_NOT_ATTEMPTED";
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK
+        working-directory: mirror04d
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 8.9
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug
+
+      - name: Verify APK and calculate SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="mirror04d/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p output
+          cp "$APK" output/MIRROR-04D-integrated-debug.apk
+          sha256sum output/MIRROR-04D-integrated-debug.apk | tee output/SHA256SUMS.txt
+          {
+            echo "Build: MIRROR-04D-alpha"
+            echo "Application ID: com.carassistant.next.mirror04d"
+            echo "GD01 SHA check: PASS"
+            echo "APK build: PASS"
+            echo "Device test: NOT RUN"
+            echo "AA surface rendering: NOT IMPLEMENTED IN THIS ALPHA"
+            echo "Touch forwarding: NOT IMPLEMENTED"
+            echo "Bluetooth auto-start: diagnostic only"
+            echo "MediaProjection consent: user approval required"
+          } | tee output/BUILD-STATUS.txt
+
+      - name: Upload APK and diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-04D-Integrated-Projection
+          path: |
+            output/MIRROR-04D-integrated-debug.apk
+            output/SHA256SUMS.txt
+            output/BUILD-STATUS.txt
+          if-no-files-found: error
+          retention-days: 14
