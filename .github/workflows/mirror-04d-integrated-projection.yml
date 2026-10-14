@@ -31,7 +31,7 @@ jobs:
               echo "::error::Missing protected file: $file"
               exit 1
             fi
-            actual="$(sha256sum "$file" | cut -d' ' -f1)"
+            actual="$(git hash-object "$file")"
             if [ "$actual" != "$expected" ]; then
               echo "::error::GD01 SHA mismatch: $file"
               echo "Expected: $expected"
