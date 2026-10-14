@@ -1,0 +1,618 @@
+name: MIRROR-04D-05B - MediaProjection Reboot Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-04d-05b-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify MIRROR-04D-05B
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify frozen GD01 core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_sha() {
+            local file="$1"
+            local expected="$2"
+
+            test -f "$file" || {
+              echo "::error::Missing protected file: $file"
+              exit 1
+            }
+
+            local actual
+            actual="$(git hash-object "$file")"
+            echo "$file: $actual"
+
+            test "$actual" = "$expected" || {
+              echo "::error::Protected SHA mismatch: $file"
+              echo "Expected: $expected"
+              echo "Actual: $actual"
+              exit 1
+            }
+          }
+
+          check_sha app/src/main/java/com/carassistant/next/HookEntry.java 667e759417611d6982bb110ef0583f9513db2c63
+          check_sha app/src/main/AndroidManifest.xml b23d082324e633bde63f0997e4c90b320f9b69df
+          check_sha app/build.gradle 7be503b5df091734ea6babd3b0108e220272207b
+
+          echo "GD01_CORE_SHA_PASS"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Create isolated 05B project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          P=mirror0405b
+          J="$P/app/src/main/java/com/carassistant/next/mirror0405b"
+
+          mkdir -p "$J" "$P/app/src/main/res/values"
+
+          cat > "$P/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MIRROR-04D-05B"
+          include(":app")
+          EOF
+
+          cat > "$P/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > "$P/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > "$P/app/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next.mirror0405b'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror0405b'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 406
+                  versionName '04D-05B'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > "$P/app/src/main/res/values/strings.xml" <<'EOF'
+          <resources>
+              <string name="app_name">MIRROR-04D-05B</string>
+          </resources>
+          EOF
+
+          cat > "$P/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".CaptureService"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection" />
+
+                  <receiver
+                      android:name=".BootReceiver"
+                      android:enabled="true"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
+
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$J/State.java" <<'EOF'
+          package com.carassistant.next.mirror0405b;
+
+          import android.content.Context;
+          import android.content.SharedPreferences;
+
+          public final class State {
+              private State() {}
+
+              private static SharedPreferences prefs(Context c) {
+                  return c.getApplicationContext().getSharedPreferences(
+                      "mirror0405b", Context.MODE_PRIVATE);
+              }
+
+              public static void record(Context c, String event) {
+                  prefs(c).edit()
+                      .putString("event", event)
+                      .putLong("time", System.currentTimeMillis())
+                      .apply();
+              }
+
+              public static String event(Context c) {
+                  return prefs(c).getString("event", "NO_EVENT_YET");
+              }
+
+              public static long time(Context c) {
+                  return prefs(c).getLong("time", 0L);
+              }
+
+              public static void frames(Context c, long count) {
+                  prefs(c).edit().putLong("frames", count).apply();
+              }
+
+              public static long frames(Context c) {
+                  return prefs(c).getLong("frames", 0L);
+              }
+          }
+          EOF
+
+          cat > "$J/BootReceiver.java" <<'EOF'
+          package com.carassistant.next.mirror0405b;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.util.Log;
+
+          public final class BootReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  if (intent != null &&
+                      Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
+                      State.record(context,
+                          "BOOT_COMPLETED: NO_PROJECTION_SESSION_RESTORED");
+                      Log.i("MIRROR0405B",
+                          "Boot received; no MediaProjection token available from this app");
+                  }
+              }
+          }
+          EOF
+
+          cat > "$J/CaptureService.java" <<'EOF'
+          package com.carassistant.next.mirror0405b;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.media.Image;
+          import android.media.ImageReader;
+          import android.media.projection.MediaProjection;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.util.DisplayMetrics;
+          import android.view.WindowManager;
+          import android.graphics.PixelFormat;
+
+          public final class CaptureService extends Service {
+              private static final String CHANNEL = "mirror0405b_capture";
+              private static final int NOTIFICATION_ID = 406;
+
+              private ImageReader reader;
+              private VirtualDisplay display;
+              private MediaProjection projection;
+              private long frameCount = 0L;
+
+              public static void start(Context c, int resultCode, Intent data) {
+                  Intent i = new Intent(c, CaptureService.class);
+                  i.putExtra("resultCode", resultCode);
+                  i.putExtra("resultData", data);
+
+                  try {
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          c.startForegroundService(i);
+                      } else {
+                          c.startService(i);
+                      }
+                  } catch (Throwable t) {
+                      State.record(c, "SERVICE_START_FAILED: " + t);
+                  }
+              }
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  NotificationManager nm =
+                      (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+
+                  if (Build.VERSION.SDK_INT >= 26 && nm != null) {
+                      nm.createNotificationChannel(new NotificationChannel(
+                          CHANNEL, "MIRROR-04D-05B Capture",
+                          NotificationManager.IMPORTANCE_LOW));
+                  }
+
+                  Notification n;
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      n = new Notification.Builder(this, CHANNEL)
+                          .setContentTitle("MIRROR-04D-05B")
+                          .setContentText("MediaProjection diagnostic running")
+                          .setSmallIcon(android.R.drawable.ic_menu_view)
+                          .setOngoing(true)
+                          .build();
+                  } else {
+                      n = new Notification.Builder(this)
+                          .setContentTitle("MIRROR-04D-05B")
+                          .setContentText("MediaProjection diagnostic running")
+                          .setSmallIcon(android.R.drawable.ic_menu_view)
+                          .setOngoing(true)
+                          .build();
+                  }
+                  startForeground(NOTIFICATION_ID, n);
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  if (intent == null || intent.getParcelableExtra("resultData") == null) {
+                      State.record(this, "CAPTURE_NOT_STARTED: NO_CONSENT_RESULT_DATA");
+                      stopSelf();
+                      return START_NOT_STICKY;
+                  }
+
+                  int resultCode = intent.getIntExtra("resultCode", 0);
+                  Intent resultData = intent.getParcelableExtra("resultData");
+
+                  try {
+                      MediaProjectionManager manager =
+                          (MediaProjectionManager) getSystemService(
+                              Context.MEDIA_PROJECTION_SERVICE);
+
+                      if (manager == null) {
+                          throw new IllegalStateException("MediaProjectionManager is null");
+                      }
+
+                      projection = manager.getMediaProjection(resultCode, resultData);
+                      if (projection == null) {
+                          throw new IllegalStateException("getMediaProjection returned null");
+                      }
+
+                      DisplayMetrics metrics = new DisplayMetrics();
+                      WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      if (wm == null) {
+                          throw new IllegalStateException("WindowManager is null");
+                      }
+                      wm.getDefaultDisplay().getRealMetrics(metrics);
+
+                      int width = Math.max(1, metrics.widthPixels);
+                      int height = Math.max(1, metrics.heightPixels);
+                      int density = Math.max(1, metrics.densityDpi);
+
+                      reader = ImageReader.newInstance(
+                          width, height, PixelFormat.RGBA_8888, 2);
+
+                      reader.setOnImageAvailableListener(r -> {
+                          Image image = null;
+                          try {
+                              image = r.acquireLatestImage();
+                              if (image != null) {
+                                  frameCount++;
+                                  State.frames(this, frameCount);
+                                  if (frameCount == 1) {
+                                      State.record(this,
+                                          "CAPTURE_ACTIVE: FIRST_FRAME_RECEIVED");
+                                  }
+                              }
+                          } catch (Throwable t) {
+                              State.record(this, "FRAME_READ_FAILED: " + t);
+                          } finally {
+                              if (image != null) image.close();
+                          }
+                      }, null);
+
+                      projection.registerCallback(new MediaProjection.Callback() {
+                          @Override
+                          public void onStop() {
+                              State.record(CaptureService.this,
+                                  "PROJECTION_STOPPED_BY_SYSTEM");
+                              stopSelf();
+                          }
+                      }, null);
+
+                      display = projection.createVirtualDisplay(
+                          "MIRROR-04D-05B",
+                          width, height, density,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                          reader.getSurface(), null, null);
+
+                      State.frames(this, 0L);
+                      State.record(this, "CAPTURE_STARTED: WAITING_FOR_FIRST_FRAME");
+                  } catch (Throwable t) {
+                      State.record(this, "CAPTURE_START_FAILED: " + t);
+                      stopSelf();
+                  }
+
+                  return START_NOT_STICKY;
+              }
+
+              @Override
+              public void onDestroy() {
+                  try {
+                      if (display != null) display.release();
+                  } catch (Throwable ignored) {}
+                  try {
+                      if (reader != null) reader.close();
+                  } catch (Throwable ignored) {}
+                  try {
+                      if (projection != null) projection.stop();
+                  } catch (Throwable ignored) {}
+
+                  State.record(this, "CAPTURE_SERVICE_DESTROYED");
+                  super.onDestroy();
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+          }
+          EOF
+
+          cat > "$J/MainActivity.java" <<'EOF'
+          package com.carassistant.next.mirror0405b;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Bundle;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public final class MainActivity extends Activity {
+              private static final int REQUEST_CAPTURE = 406;
+              private TextView status;
+
+              @Override
+              protected void onCreate(Bundle saved) {
+                  super.onCreate(saved);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(24, 24, 24, 24);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-04D-05B\nMediaProjection Diagnostic");
+                  title.setTextSize(22);
+                  root.addView(title);
+
+                  status = new TextView(this);
+                  status.setTextSize(15);
+                  status.setPadding(0, 20, 0, 20);
+                  root.addView(status, new LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+                  Button start = new Button(this);
+                  start.setText("Request screen capture permission");
+                  start.setOnClickListener(v -> requestCapture());
+                  root.addView(start);
+
+                  Button refresh = new Button(this);
+                  refresh.setText("Refresh diagnostics");
+                  refresh.setOnClickListener(v -> refresh());
+                  root.addView(refresh);
+
+                  Button stop = new Button(this);
+                  stop.setText("Stop capture service");
+                  stop.setOnClickListener(v -> {
+                      stopService(new Intent(this, CaptureService.class));
+                      State.record(this, "CAPTURE_STOP_REQUESTED");
+                      refresh();
+                  });
+                  root.addView(stop);
+
+                  setContentView(root);
+                  refresh();
+              }
+
+              private void requestCapture() {
+                  try {
+                      MediaProjectionManager manager =
+                          (MediaProjectionManager) getSystemService(
+                              MEDIA_PROJECTION_SERVICE);
+                      if (manager == null) {
+                          State.record(this, "ERROR: NO_MEDIAPROJECTION_MANAGER");
+                          refresh();
+                          return;
+                      }
+                      startActivityForResult(
+                          manager.createScreenCaptureIntent(), REQUEST_CAPTURE);
+                  } catch (Throwable t) {
+                      State.record(this, "CONSENT_REQUEST_FAILED: " + t);
+                      refresh();
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int request, int result, Intent data) {
+                  super.onActivityResult(request, result, data);
+
+                  if (request != REQUEST_CAPTURE) return;
+
+                  if (result == RESULT_OK && data != null) {
+                      State.record(this, "CONSENT_GRANTED: STARTING_CAPTURE_SERVICE");
+                      CaptureService.start(this, result, data);
+                  } else {
+                      State.record(this, "CONSENT_DENIED_OR_CANCELLED");
+                  }
+                  refresh();
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  refresh();
+              }
+
+              private void refresh() {
+                  if (status == null) return;
+
+                  status.setText(
+                      "Package: com.carassistant.next.mirror0405b\n" +
+                      "Last event: " + State.event(this) + "\n" +
+                      "Timestamp: " + State.time(this) + "\n" +
+                      "Frames received: " + State.frames(this) + "\n\n" +
+                      "This is a diagnostic build.\n" +
+                      "A boot event does not restore a capture session.\n" +
+                      "It does not automatically grant screen-capture consent.");
+              }
+          }
+          EOF
+
+      - name: Validate generated project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          ET.parse("mirror0405b/app/src/main/AndroidManifest.xml")
+          ET.parse("mirror0405b/app/src/main/res/values/strings.xml")
+
+          required = [
+              "MainActivity.java",
+              "CaptureService.java",
+              "BootReceiver.java",
+              "State.java",
+          ]
+          base = "mirror0405b/app/src/main/java/com/carassistant/next/mirror0405b/"
+          for name in required:
+              with open(base + name, encoding="utf-8") as f:
+                  text = f.read()
+              if not text.strip():
+                  raise SystemExit("Empty source: " + name)
+
+          print("XML_PARSE_PASS")
+          print("JAVA_SOURCE_NONEMPTY_PASS")
+          PY
+
+      - name: Build debug APK
+        working-directory: mirror0405b
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 8.9
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug
+
+      - name: Verify APK and generate SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="mirror0405b/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p output
+          cp "$APK" output/MIRROR-04D-05B-mediaprojection-diagnostic.apk
+
+          sha256sum output/MIRROR-04D-05B-mediaprojection-diagnostic.apk \
+            | tee output/SHA256SUMS.txt
+
+          cat > output/BUILD-STATUS.txt <<'EOF'
+          Workflow: MIRROR-04D-05B
+          Purpose: MediaProjection consent and reboot diagnostic
+          Application ID: com.carassistant.next.mirror0405b
+          Protected GD01 SHA checks: PASS if workflow reaches this step
+          XML validation: PASS if workflow reaches this step
+          Gradle APK build: PASS if workflow reaches this step
+          Device test: NOT RUN
+          Consent flow: MUST TEST ON DEVICE
+          Frame reception: MUST TEST ON DEVICE
+          Automatic MediaProjection after reboot: NOT IMPLEMENTED
+          Automatic screen mirroring to Android Auto: NOT IMPLEMENTED
+          LSPosed automation: NOT IMPLEMENTED
+          EOF
+
+      - name: Upload APK and diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-04D-05B-MediaProjection-Diagnostic
+          path: |
+            output/MIRROR-04D-05B-mediaprojection-diagnostic.apk
+            output/SHA256SUMS.txt
+            output/BUILD-STATUS.txt
+          if-no-files-found: error
+          retention-days: 14
