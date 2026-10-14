@@ -592,24 +592,53 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="mirror03a/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
+
           mkdir -p out
           cp "$APK" out/MIRROR-03A-Fix1-Capture.apk
+
+          echo "=== APK SHA256 ==="
           sha256sum out/MIRROR-03A-Fix1-Capture.apk \
             | tee out/MIRROR-03A-Fix1-SHA256.txt
+
+          echo "=== APK PACKAGE CHECK ==="
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
             out/MIRROR-03A-Fix1-Capture.apk \
             | tee out/MIRROR-03A-Fix1-badging.txt
+
           grep -q "com.carassistant.next.mirror03a" \
             out/MIRROR-03A-Fix1-badging.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree \
-            out/MIRROR-03A-Fix1-Capture.apk AndroidManifest.xml \
-            > out/MIRROR-03A-Fix1-manifest.txt
-          grep -q "FOREGROUND_SERVICE" \
+
+          echo "=== FIND APK ANALYZER ==="
+          ANALYZER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name apkanalyzer -print -quit)"
+
+          if [[ -z "$ANALYZER" ]]; then
+            echo "::error::apkanalyzer was not found in Android SDK"
+            exit 1
+          fi
+
+          echo "=== DECODE APK MANIFEST ==="
+          "$ANALYZER" manifest print \
+            out/MIRROR-03A-Fix1-Capture.apk \
+            | tee out/MIRROR-03A-Fix1-manifest.txt
+
+          echo "=== VERIFY FOREGROUND SERVICE PERMISSIONS ==="
+          grep -q "android.permission.FOREGROUND_SERVICE" \
             out/MIRROR-03A-Fix1-manifest.txt
-          grep -q "mediaProjection" \
+
+          grep -q "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" \
             out/MIRROR-03A-Fix1-manifest.txt
+
+          echo "=== VERIFY MEDIA PROJECTION SERVICE TYPE ==="
+          grep -q 'foregroundServiceType="mediaProjection"' \
+            out/MIRROR-03A-Fix1-manifest.txt
+
+          grep -q "Mirror03AProjectionService" \
+            out/MIRROR-03A-Fix1-manifest.txt
+
           echo "MIRROR-03A FIX1 APK CHECK: PASS"
 
       - name: Upload Fix1 artifact
