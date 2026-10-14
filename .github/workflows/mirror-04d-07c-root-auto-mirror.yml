@@ -1,0 +1,203 @@
+name: MIRROR-04D-07C - Root Auto Mirror
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-04d-07c-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build isolated 07C root auto-mirror APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify frozen core and protected workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_sha() {
+            local file="$1"
+            local expected="$2"
+            test -f "$file" || { echo "::error::Missing protected file: $file"; exit 1; }
+            local actual
+            actual="$(git hash-object "$file")"
+            echo "$file: $actual"
+            test "$actual" = "$expected" || {
+              echo "::error::Protected SHA mismatch: $file"
+              echo "Expected: $expected"
+              echo "Actual: $actual"
+              exit 1
+            }
+          }
+          check_sha app/src/main/java/com/carassistant/next/HookEntry.java 667e759417611d6982bb110ef0583f9513db2c63
+          check_sha app/src/main/AndroidManifest.xml b23d082324e633bde63f0997e4c90b320f9b69df
+          check_sha app/build.gradle 7be503b5df091734ea6babd3b0108e220272207b
+          check_sha .github/workflows/mirror-04d-04-low-latency.yml c41eb33d7fd459f0ab4e2d7789b1a200305584ef
+          check_sha .github/workflows/mirror-04d-05a-autostart-detector.yml b6ba7943fd08c2496d9a103931982f97219c96c7
+          check_sha .github/workflows/mirror-04d-05d-connection-signal-verification.yml 4ac5a4fe8507a86df8c53d50d4fe07d82ac3de6f
+          check_sha .github/workflows/mirror-04d-06a-auto-trigger-mirror.yml f35a076cd6d7f26482cba2a461735e919b33b5e4
+          check_sha .github/workflows/mirror-04d-07b-root-auto-permission.yml cd6ee08d2ca5000082561f20d618cee1d1e7c098
+          echo "PROTECTED_SHA_CHECK_PASS"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Generate isolated 07C and add root AppOps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+          workflow = Path( ".github/workflows/mirror-04d-06a-auto-trigger-mirror.yml" ).read_text(encoding="utf-8")
+          marker = "- name: Generate isolated 06A project from frozen 04D-04 source"
+          if workflow.count(marker) != 1:
+              raise SystemExit("FAIL: expected exactly one 06A generator step")
+          step_start = workflow.index(marker)
+          heredoc_start = workflow.find(" python3 - <<'PY'", step_start)
+          if heredoc_start < 0:
+              raise SystemExit("FAIL: 06A generator heredoc not found")
+          body_start = workflow.find("\n", heredoc_start) + 1
+          body_end = workflow.find("\n PY", body_start)
+          if body_end < 0:
+              raise SystemExit("FAIL: 06A generator heredoc terminator not found")
+          script = textwrap.dedent(workflow[body_start:body_end])
+          replacements = [
+              ("mirror0406a", "mirror0407c"),
+              ("MIRROR-04D-06A", "MIRROR-04D-07C"),
+              ("versionCode 409", "versionCode 413"),
+              ("versionName '04D-06A'", "versionName '04D-07C'"),
+          ]
+          for old, new in replacements:
+              if old not in script:
+                  raise SystemExit("FAIL: generator anchor missing: " + old)
+              script = script.replace(old, new)
+          Path("/tmp/generate_07c.py").write_text( script, encoding="utf-8" )
+          print("06A_GENERATOR_EXTRACTION_PASS")
+          PY
+          python3 /tmp/generate_07c.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+          project = Path("mirror0407c")
+          java_file = project / ( "app/src/main/java/com/carassistant/next/" "mirror0407c/ConnectionMonitorService.java" )
+          if not java_file.is_file():
+              raise SystemExit("FAIL: generated connection monitor missing")
+          source = java_file.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"(?ms)^([ \t]*)private void launchConsentActivity\(\) \{"
+              r".*?^([ \t]*)\}\n(?=[ \t]*private Notification buildNotification)"
+          )
+          replacement = r'''
+              private void launchConsentActivity() {
+                  String appops = runRoot(
+                      "appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow"
+                      + " && appops get com.carassistant.next.mirror0407c PROJECT_MEDIA");
+                  if (appops.contains("ROOT_COMMAND_FAILED") || appops.contains("ROOT_COMMAND_TIMEOUT") || appops.contains("ROOT_UNAVAILABLE:")) {
+                      status = "AA_CONNECTED_APPOPS_FAILED";
+                      return;
+                  }
+                  String result = runRoot(
+                      "am start -n com.carassistant.next.mirror0407c/.MainActivity"
+                      + " --ez auto_capture true");
+                  status = result.contains("ROOT_COMMAND_FAILED") || result.contains("ROOT_COMMAND_TIMEOUT") || result.contains("ROOT_UNAVAILABLE:")
+                      ? "AA_CONNECTED_ACTIVITY_LAUNCH_FAILED"
+                      : "AA_CONNECTED_APPOPS_SET_AND_CONSENT_REQUESTED";
+              }
+          '''
+          patched, count = pattern.subn( lambda m: replacement, source, count=1 )
+          if count != 1:
+              raise SystemExit( "FAIL: launchConsentActivity anchor mismatch; refusing to patch" )
+          if patched.count("appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow") != 1:
+              raise SystemExit("FAIL: expected exactly one AppOps insertion")
+          java_file.write_text(patched, encoding="utf-8")
+          manifest = project / "app/src/main/AndroidManifest.xml"
+          ET.parse(manifest)
+          gradle = (project / "app/build.gradle").read_text(encoding="utf-8")
+          if "com.carassistant.next.mirror0407c" not in gradle:
+              raise SystemExit("FAIL: 07C application ID mismatch")
+          if "versionName '04D-07C'" not in gradle:
+              raise SystemExit("FAIL: 07C version mismatch")
+          print("07C_ROOT_APPOPS_PATCH_PASS")
+          print("MANIFEST_XML_PARSE_PASS")
+          print("07C_PACKAGE_VERSION_CHECK_PASS")
+          PY
+
+      - name: Build APK
+        working-directory: mirror0407c
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 8.9
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug
+
+      - name: Verify APK and create SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="mirror0407c/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p output
+          cp "$APK" output/MIRROR-04D-07C-root-auto-mirror.apk
+          sha256sum output/MIRROR-04D-07C-root-auto-mirror.apk \
+            | tee output/SHA256SUMS.txt
+          cat > output/BUILD-STATUS.txt <<'EOF'
+          Workflow: MIRROR-04D-07C
+          Purpose: Root AppOps before Android Auto connection-triggered capture
+          Application ID: com.carassistant.next.mirror0407c
+          Frozen core SHA checks: PASS if this step is reached
+          Protected workflow SHA checks: PASS if this step is reached
+          Source extraction: PASS if this step is reached
+          Root AppOps patch: PASS if this step is reached
+          Manifest XML validation: PASS if this step is reached
+          Gradle APK build: PASS if this step is reached
+          Device test: NOT RUN
+          USB auto-trigger: MUST TEST ON DEVICE
+          Wireless auto-trigger: MUST TEST ON DEVICE
+          Root permission: MUST BE GRANTED TO 07C IN MAGISK
+          MediaProjection consent suppression: NOT GUARANTEED
+          Reboot behavior: MUST TEST ON DEVICE
+          Full unattended mirroring: NOT YET CONFIRMED
+          EOF
+
+      - name: Upload APK and build status
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-04D-07C-Root-Auto-Mirror
+          path: |
+            output/MIRROR-04D-07C-root-auto-mirror.apk
+            output/SHA256SUMS.txt
+            output/BUILD-STATUS.txt
+          if-no-files-found: error
+          retention-days: 14
