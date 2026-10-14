@@ -217,31 +217,49 @@ jobs:
                   }
               }
 
+                      
               private String runRootCommand(String command) {
                   Process process = null;
                   try {
                       process = Runtime.getRuntime().exec(
-                          new String[]{"su", "-c", command});
-                      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                      Thread stdout = new Thread(() -> copy(
-                          processStream(process, true), bytes));
-                      ByteArrayOutputStream errors = new ByteArrayOutputStream();
-                      Thread stderr = new Thread(() -> copy(
-                          processStream(process, false), errors));
-                      stdout.start();
-                      stderr.start();
-                      int code = process.waitFor();
-                      stdout.join();
-                      stderr.join();
-                      String out = new String(bytes.toByteArray(), StandardCharsets.UTF_8);
-                      String err = new String(errors.toByteArray(), StandardCharsets.UTF_8);
-                      return "exit=" + code + "\n" + out + (err.isEmpty() ? "" : "\nSTDERR:\n" + err);
-                  } catch (Throwable t) {
-                      return "ROOT_COMMAND_FAILED: " + t;
-                  } finally {
-                      if (process != null) process.destroy();
-                  }
-              }
+                                 new String[]{"su", "-c", command});
+
+                     // Dùng biến final cho các lambda đọc stdout/stderr.
+                     final Process proc = process;
+
+                     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                     ByteArrayOutputStream errors = new ByteArrayOutputStream();
+
+                     Thread stdout = new Thread(() ->
+                         copy(proc.getInputStream(), bytes));
+
+                     Thread stderr = new Thread(() ->
+                         copy(proc.getErrorStream(), errors));
+
+                     stdout.start();
+                     stderr.start();
+
+                     int code = proc.waitFor();
+                     stdout.join();
+                     stderr.join();
+
+                     String out = new String(
+                         bytes.toByteArray(), StandardCharsets.UTF_8);
+                     String err = new String(
+                         errors.toByteArray(), StandardCharsets.UTF_8);
+
+                     return "exit=" + code + "\n" + out
+                         + (err.isEmpty() ? "" : "\nSTDERR:\n" + err);
+
+                } catch (Throwable t) {
+                    return "ROOT_COMMAND_FAILED: " + t;
+                } finally {
+                    if (process != null) {
+                        process.destroy();
+                    }
+                }
+            }
+
 
               private InputStream processStream(Process p, boolean stdout) {
                   return stdout ? p.getInputStream() : p.getErrorStream();
