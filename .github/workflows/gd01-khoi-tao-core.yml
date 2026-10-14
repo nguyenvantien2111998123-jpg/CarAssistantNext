@@ -1,0 +1,308 @@
+name: GD01 - Khoi tao core
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gd01-khoi-tao-core
+  cancel-in-progress: false
+
+jobs:
+  khoi-tao-va-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Lay source main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Cai JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cai Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cai Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Kiem tra khong ghi de source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for path in \
+            settings.gradle \
+            build.gradle \
+            gradle.properties \
+            app/build.gradle \
+            app/src/main/AndroidManifest.xml \
+            app/src/main/java/com/carassistant/next/HomeActivity.java
+          do
+            if [ -e "$path" ]; then
+              echo "::error::File da ton tai: $path"
+              echo "Dung de tranh ghi de source."
+              exit 1
+            fi
+          done
+
+      - name: Tao source Android core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p \
+            app/src/main/java/com/carassistant/next \
+            app/src/main/assets
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri("https://api.xposed.info/") }
+              }
+          }
+
+          rootProject.name = "CarAssistantNext"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > .gitignore <<'EOF'
+          .gradle/
+          **/build/
+          local.properties
+          .idea/
+          *.iml
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 1
+                  versionName '1.0.0-core-v1'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              compileOnly 'de.robv.android.xposed:api:82'
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="CarAssistantNext"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar"
+                  android:supportsRtl="true">
+
+                  <meta-data
+                      android:name="xposedmodule"
+                      android:value="true" />
+
+                  <meta-data
+                      android:name="xposeddescription"
+                      android:value="GD01 - Khoi tao core" />
+
+                  <meta-data
+                      android:name="xposedminversion"
+                      android:value="93" />
+
+                  <activity
+                      android:name=".HomeActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/assets/xposed_init <<'EOF'
+          com.carassistant.next.HookEntry
+          EOF
+
+          cat > app/src/main/java/com/carassistant/next/HomeActivity.java <<'EOF'
+          package com.carassistant.next;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.graphics.Color;
+          import android.view.Gravity;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public final class HomeActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setGravity(Gravity.CENTER);
+                  root.setPadding(28, 28, 28, 28);
+                  root.setBackgroundColor(Color.rgb(20, 27, 38));
+
+                  TextView title = new TextView(this);
+                  title.setText("Core V1");
+                  title.setTextSize(28);
+                  title.setTextColor(Color.WHITE);
+                  title.setGravity(Gravity.CENTER);
+
+                  TextView status = new TextView(this);
+                  status.setText(
+                      "Android 12\\n\\n" +
+                      "APK nen da khoi tao.\\n" +
+                      "Can kiem tra LSPosed rieng.\\n\\n" +
+                      "Chua co hook phim vo lang."
+                  );
+                  status.setTextSize(16);
+                  status.setTextColor(Color.LTGRAY);
+                  status.setGravity(Gravity.CENTER);
+                  status.setPadding(0, 24, 0, 0);
+
+                  root.addView(title);
+                  root.addView(status);
+                  setContentView(root);
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/carassistant/next/HookEntry.java <<'EOF'
+          package com.carassistant.next;
+
+          import de.robv.android.xposed.IXposedHookLoadPackage;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+          public final class HookEntry implements IXposedHookLoadPackage {
+              @Override
+              public void handleLoadPackage(
+                      XC_LoadPackage.LoadPackageParam param) {
+                  String name = param.packageName;
+
+                  if ("android".equals(name)
+                          || "com.google.android.projection.gearhead".equals(name)) {
+                      XposedBridge.log(
+                          "GD01 Core: loaded in " + name);
+                  }
+              }
+          }
+          EOF
+
+          cat > README.md <<'EOF'
+          # CarAssistantNext Core V1
+
+          Android 12 foundation for POCO F1 with Magisk and LSPosed.
+
+          GD01 includes an Android app shell and a diagnostic Xposed entry point.
+          Steering-wheel actions, projection and touch injection are not implemented.
+
+          Build:
+          gradle --no-daemon :app:assembleDebug
+
+          Build success does not prove LSPosed activation.
+          EOF
+
+      - name: Kiem tra source va manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s app/src/main/assets/xposed_init
+          test -s app/src/main/java/com/carassistant/next/HookEntry.java
+          grep -q 'com.carassistant.next.HookEntry' \
+            app/src/main/assets/xposed_init
+          grep -q 'xposedmodule' app/src/main/AndroidManifest.xml
+
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse("app/src/main/AndroidManifest.xml")
+          print("Manifest XML: PASS")
+          PY
+
+      - name: Commit source moi
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add README.md .gitignore settings.gradle build.gradle \
+            gradle.properties app
+
+          git commit -m "GD01 Khoi tao core"
+          git push origin HEAD:main
+
+      - name: Build APK debug
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:assembleDebug
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p output
+          cp "$APK" output/GD01-Core-debug.apk
+          sha256sum output/GD01-Core-debug.apk \
+            | awk '{print $1 "  GD01-Core-debug.apk"}' \
+            > output/GD01-SHA256.txt
+
+      - name: Luu APK va SHA256
+        uses: actions/upload-artifact@v4
+        with:
+          name: GD01-Core-debug
+          path: |
+            output/GD01-Core-debug.apk
+            output/GD01-SHA256.txt
+          if-no-files-found: error
+          retention-days: 14
