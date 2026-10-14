@@ -322,7 +322,6 @@ jobs:
                       .build();
                   return new NavigationTemplate.Builder()
                       .setActionStrip(strip)
-                      .withPan()
                       .build();
               }
           }
