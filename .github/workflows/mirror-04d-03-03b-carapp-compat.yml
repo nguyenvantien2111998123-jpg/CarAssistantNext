@@ -1,0 +1,667 @@
+name: MIRROR-04D-03 - Android Auto Surface Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-04d-03-surface-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Verify frozen GD01
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_sha() {
+            file="$1"
+            expected="$2"
+            test -f "$file" || {
+              echo "::error::Missing protected file: $file"
+              exit 1
+            }
+            actual="$(git hash-object "$file")"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Protected SHA mismatch: $file"
+              echo "Expected: $expected"
+              echo "Actual: $actual"
+              exit 1
+            fi
+            echo "GD01_SHA_PASS $file $actual"
+          }
+
+          check_sha app/src/main/java/com/carassistant/next/HookEntry.java 667e759417611d6982bb110ef0583f9513db2c63
+          check_sha app/src/main/AndroidManifest.xml b23d082324e633bde63f0997e4c90b320f9b69df
+          check_sha app/build.gradle 7be503b5df091734ea6babd3b0108e220272207b
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Create isolated MIRROR-04D-03 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          P=mirror0403
+          SRC="$P/app/src/main/java/com/carassistant/next/mirror0403"
+          mkdir -p "$SRC" "$P/app/src/main/res/xml"
+
+          cat > "$P/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MIRROR-04D-03"
+          include(":app")
+          EOF
+
+          cat > "$P/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > "$P/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > "$P/app/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next.mirror0403'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror0403'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 403
+                  versionName '04D-03'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.car.app:app:1.7.0'
+          }
+          EOF
+
+          cat > "$P/app/src/main/res/xml/automotive_app_desc.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <automotiveApp>
+              <uses name="template" />
+          </automotiveApp>
+          EOF
+
+          cat > "$P/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+              <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+              <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="MIRROR-04D-03"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <meta-data
+                      android:name="com.google.android.gms.car.application"
+                      android:resource="@xml/automotive_app_desc" />
+                  <meta-data
+                      android:name="androidx.car.app.minCarApiLevel"
+                      android:value="1" />
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".ProjectionService"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection" />
+
+                  <service
+                      android:name=".MirrorCarAppService"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="androidx.car.app.CarAppService" />
+                          <category android:name="androidx.car.app.category.NAVIGATION" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="androidx.car.app.minCarApiLevel"
+                          android:value="1" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$SRC/FrameStore.java" <<'EOF'
+          package com.carassistant.next.mirror0403;
+
+          import android.graphics.Bitmap;
+
+          public final class FrameStore {
+              private FrameStore() {}
+
+              private static Bitmap latest;
+              public static volatile long frameCount = 0;
+              public static volatile String projectionStatus = "NOT_STARTED";
+              public static volatile String carStatus = "CAR_APP_NOT_STARTED";
+              public static volatile String error = "NONE";
+
+              public static synchronized void setFrame(Bitmap bitmap) {
+                  Bitmap old = latest;
+                  latest = bitmap;
+                  frameCount++;
+                  if (old != null && old != bitmap && !old.isRecycled()) {
+                      old.recycle();
+                  }
+              }
+
+              public static synchronized Bitmap getFrame() {
+                  return latest;
+              }
+          }
+          EOF
+
+          cat > "$SRC/MainActivity.java" <<'EOF'
+          package com.carassistant.next.mirror0403;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              private static final int REQUEST_CAPTURE = 403;
+              private TextView info;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(24, 24, 24, 24);
+                  layout.setGravity(Gravity.CENTER_HORIZONTAL);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-04D-03 Surface Test");
+                  title.setTextSize(22);
+                  layout.addView(title);
+
+                  info = new TextView(this);
+                  info.setTextSize(16);
+                  info.setPadding(0, 24, 0, 24);
+                  layout.addView(info);
+
+                  Button start = new Button(this);
+                  start.setText("1. Start screen capture");
+                  start.setOnClickListener(v -> {
+                      MediaProjectionManager manager =
+                          (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                      startActivityForResult(
+                          manager.createScreenCaptureIntent(), REQUEST_CAPTURE);
+                  });
+                  layout.addView(start);
+
+                  Button refresh = new Button(this);
+                  refresh.setText("2. Refresh diagnostics");
+                  refresh.setOnClickListener(v -> refreshInfo());
+                  layout.addView(refresh);
+
+                  setContentView(layout);
+                  refreshInfo();
+              }
+
+              @Override
+              protected void onActivityResult(int request, int result, Intent data) {
+                  super.onActivityResult(request, result, data);
+                  if (request != REQUEST_CAPTURE) return;
+
+                  if (result != RESULT_OK || data == null) {
+                      FrameStore.projectionStatus = "CONSENT_DENIED";
+                      FrameStore.error = "USER_DID_NOT_GRANT_CAPTURE";
+                      refreshInfo();
+                      return;
+                  }
+
+                  Intent service = new Intent(this, ProjectionService.class);
+                  service.putExtra("resultCode", result);
+                  service.putExtra("resultData", data);
+
+                  try {
+                      startForegroundService(service);
+                      FrameStore.projectionStatus = "SERVICE_START_REQUESTED";
+                      FrameStore.error = "NONE";
+                  } catch (Throwable e) {
+                      FrameStore.projectionStatus = "SERVICE_START_FAILED";
+                      FrameStore.error = e.toString();
+                  }
+                  refreshInfo();
+              }
+
+              private void refreshInfo() {
+                  if (info == null) return;
+                  info.setText(
+                      "Package: com.carassistant.next.mirror0403\n" +
+                      "Projection: " + FrameStore.projectionStatus + "\n" +
+                      "Frames: " + FrameStore.frameCount + "\n" +
+                      "Android Auto: " + FrameStore.carStatus + "\n" +
+                      "Error: " + FrameStore.error + "\n\n" +
+                      "Approve capture, then open the app in Android Auto.");
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  refreshInfo();
+              }
+          }
+          EOF
+
+          cat > "$SRC/ProjectionService.java" <<'EOF'
+          package com.carassistant.next.mirror0403;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.content.pm.ServiceInfo;
+          import android.graphics.Bitmap;
+          import android.graphics.PixelFormat;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.media.Image;
+          import android.media.ImageReader;
+          import android.media.projection.MediaProjection;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.util.DisplayMetrics;
+          import android.view.WindowManager;
+          import java.nio.ByteBuffer;
+
+          public class ProjectionService extends Service {
+              private MediaProjection projection;
+              private VirtualDisplay display;
+              private ImageReader reader;
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  try {
+                      startNotification();
+                      if (intent == null || !intent.hasExtra("resultData")) {
+                          throw new IllegalStateException("NO_PROJECTION_TOKEN");
+                      }
+
+                      int resultCode = intent.getIntExtra("resultCode", 0);
+                      Intent resultData = intent.getParcelableExtra("resultData");
+                      if (resultData == null) {
+                          throw new IllegalStateException("RESULT_DATA_NULL");
+                      }
+
+                      MediaProjectionManager manager =
+                          (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                      projection = manager.getMediaProjection(resultCode, resultData);
+                      if (projection == null) {
+                          throw new IllegalStateException("PROJECTION_NULL");
+                      }
+
+                      projection.registerCallback(new MediaProjection.Callback() {
+                          @Override
+                          public void onStop() {
+                              FrameStore.projectionStatus = "PROJECTION_STOPPED";
+                              stopSelf();
+                          }
+                      }, null);
+
+                      DisplayMetrics metrics = new DisplayMetrics();
+                      WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      wm.getDefaultDisplay().getRealMetrics(metrics);
+
+                      int width = Math.max(1, metrics.widthPixels);
+                      int height = Math.max(1, metrics.heightPixels);
+
+                      reader = ImageReader.newInstance(
+                          width, height, PixelFormat.RGBA_8888, 2);
+
+                      reader.setOnImageAvailableListener(source -> {
+                          Image image = null;
+                          try {
+                              image = source.acquireLatestImage();
+                              if (image == null) return;
+
+                              Image.Plane plane = image.getPlanes()[0];
+                              ByteBuffer buffer = plane.getBuffer();
+                              int pixelStride = plane.getPixelStride();
+                              int rowStride = plane.getRowStride();
+                              int paddedWidth = width +
+                                  (rowStride - pixelStride * width) / pixelStride;
+
+                              Bitmap padded = Bitmap.createBitmap(
+                                  paddedWidth, height, Bitmap.Config.ARGB_8888);
+                              padded.copyPixelsFromBuffer(buffer);
+                              Bitmap frame = Bitmap.createBitmap(
+                                  padded, 0, 0, width, height);
+                              padded.recycle();
+
+                              FrameStore.setFrame(frame);
+                              FrameStore.projectionStatus = "FRAME_OK";
+                              FrameStore.error = "NONE";
+                          } catch (Throwable e) {
+                              FrameStore.projectionStatus = "FRAME_ERROR";
+                              FrameStore.error = e.toString();
+                          } finally {
+                              if (image != null) image.close();
+                          }
+                      }, null);
+
+                      display = projection.createVirtualDisplay(
+                          "MIRROR-04D-03", width, height, metrics.densityDpi,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                          reader.getSurface(), null, null);
+
+                      FrameStore.projectionStatus = "CAPTURE_STARTED";
+                      FrameStore.error = "NONE";
+                  } catch (Throwable e) {
+                      FrameStore.projectionStatus = "START_FAILED";
+                      FrameStore.error = e.toString();
+                      stopSelf();
+                  }
+                  return START_NOT_STICKY;
+              }
+
+              private void startNotification() {
+                  String id = "mirror0403";
+                  NotificationManager manager =
+                      getSystemService(NotificationManager.class);
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      manager.createNotificationChannel(new NotificationChannel(
+                          id, "MIRROR-04D-03", NotificationManager.IMPORTANCE_LOW));
+                  }
+
+                  Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                      ? new Notification.Builder(this, id)
+                      : new Notification.Builder(this);
+                  builder.setContentTitle("MIRROR-04D-03")
+                      .setContentText("Screen capture diagnostic running")
+                      .setSmallIcon(android.R.drawable.ic_menu_view);
+
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(403, builder.build(),
+                          ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+                  } else {
+                      startForeground(403, builder.build());
+                  }
+              }
+
+              @Override
+              public void onDestroy() {
+                  if (display != null) display.release();
+                  if (reader != null) reader.close();
+                  if (projection != null) projection.stop();
+                  super.onDestroy();
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+          }
+          EOF
+
+          cat > "$SRC/MirrorCarAppService.java" <<'EOF'
+          package com.carassistant.next.mirror0403;
+
+          import androidx.car.app.CarAppService;
+          import androidx.car.app.Session;
+          import androidx.car.app.validation.HostValidator;
+
+          public class MirrorCarAppService extends CarAppService {
+              @Override
+              public HostValidator createHostValidator() {
+                  return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR;
+              }
+
+              @Override
+              public Session onCreateSession() {
+                  FrameStore.carStatus = "CAR_SESSION_CREATED";
+                  return new MirrorSession();
+              }
+          }
+          EOF
+
+          cat > "$SRC/MirrorSession.java" <<'EOF'
+          package com.carassistant.next.mirror0403;
+
+          import android.content.Intent;
+          import androidx.car.app.Screen;
+          import androidx.car.app.Session;
+
+          public class MirrorSession extends Session {
+              @Override
+              public Screen onCreateScreen(Intent intent) {
+                  FrameStore.carStatus = "CAR_APP_DISCOVERED";
+                  return new MirrorScreen(getCarContext());
+              }
+          }
+          EOF
+
+          cat > "$SRC/MirrorScreen.java" <<'EOF'
+          package com.carassistant.next.mirror0403;
+
+          import android.graphics.Bitmap;
+          import android.graphics.Canvas;
+          import android.graphics.Paint;
+          import android.graphics.Rect;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.Surface;
+
+          import androidx.car.app.AppManager;
+          import androidx.car.app.CarContext;
+          import androidx.car.app.Screen;
+          import androidx.car.app.SurfaceCallback;
+          import androidx.car.app.SurfaceContainer;
+          import androidx.car.app.model.Action;
+          import androidx.car.app.model.ActionStrip;
+          import androidx.car.app.model.Template;
+          import androidx.car.app.navigation.model.NavigationTemplate;
+
+          public class MirrorScreen extends Screen {
+              private final Handler handler = new Handler(Looper.getMainLooper());
+              private Surface surface;
+              private int surfaceWidth;
+              private int surfaceHeight;
+              private boolean drawing;
+              private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+
+              private final Runnable drawRunnable = new Runnable() {
+                  @Override
+                  public void run() {
+                      if (!drawing || surface == null || !surface.isValid()) return;
+                      Canvas canvas = null;
+                      try {
+                          canvas = surface.lockCanvas(null);
+                          if (canvas != null) {
+                              canvas.drawColor(0xFF101010);
+                              synchronized (FrameStore.class) {
+                                  Bitmap frame = FrameStore.getFrame();
+                                  if (frame != null && !frame.isRecycled()) {
+                                      float scale = Math.min(
+                                          (float) surfaceWidth / frame.getWidth(),
+                                          (float) surfaceHeight / frame.getHeight());
+                                      int w = Math.max(1, (int) (frame.getWidth() * scale));
+                                      int h = Math.max(1, (int) (frame.getHeight() * scale));
+                                      int left = (surfaceWidth - w) / 2;
+                                      int top = (surfaceHeight - h) / 2;
+                                      canvas.drawBitmap(frame, null,
+                                          new Rect(left, top, left + w, top + h), paint);
+                                      FrameStore.carStatus = "FRAME_RENDERED";
+                                  } else {
+                                      paint.setColor(0xFFFFFFFF);
+                                      paint.setTextSize(32);
+                                      canvas.drawText(
+                                          "MIRROR-04D-03 waiting for frames", 20, 50, paint);
+                                  }
+                              }
+                          }
+                      } catch (Throwable e) {
+                          FrameStore.carStatus = "SURFACE_DRAW_ERROR";
+                          FrameStore.error = e.toString();
+                      } finally {
+                          if (canvas != null) {
+                              try {
+                                  surface.unlockCanvasAndPost(canvas);
+                              } catch (Throwable ignored) {}
+                          }
+                      }
+                      if (drawing) handler.postDelayed(this, 100);
+                  }
+              };
+
+              private final SurfaceCallback callback = new SurfaceCallback() {
+                  @Override
+                  public void onSurfaceAvailable(SurfaceContainer container) {
+                      surface = container.getSurface();
+                      surfaceWidth = container.getWidth();
+                      surfaceHeight = container.getHeight();
+                      FrameStore.carStatus = "SURFACE_READY";
+                      drawing = true;
+                      handler.removeCallbacks(drawRunnable);
+                      handler.post(drawRunnable);
+                  }
+
+                  @Override
+                  public void onSurfaceDestroyed(SurfaceContainer container) {
+                      drawing = false;
+                      handler.removeCallbacks(drawRunnable);
+                      surface = null;
+                      FrameStore.carStatus = "SURFACE_DESTROYED";
+                  }
+
+                  @Override
+                  public void onClick(float x, float y) {
+                      FrameStore.carStatus = "SURFACE_CLICK_RECEIVED";
+                  }
+
+                  @Override
+                  public void onScroll(float distanceX, float distanceY) {
+                      FrameStore.carStatus = "SURFACE_SCROLL_RECEIVED";
+                  }
+
+                  @Override
+                  public void onScale(float focusX, float focusY, float scaleFactor) {
+                      FrameStore.carStatus = "SURFACE_SCALE_RECEIVED";
+                  }
+              };
+
+              public MirrorScreen(CarContext context) {
+                  super(context);
+                  context.getCarService(AppManager.class)
+                      .setSurfaceCallback(callback);
+              }
+
+              @Override
+              public Template onGetTemplate() {
+                  ActionStrip strip = new ActionStrip.Builder()
+                      .addAction(Action.APP_ICON)
+                      .build();
+                  return new NavigationTemplate.Builder()
+                      .setActionStrip(strip)
+                      .build();
+              }
+          }
+          EOF
+
+      - name: Build APK
+        working-directory: mirror0403
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 8.9
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug
+
+      - name: Verify APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="mirror0403/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p output
+          cp "$APK" output/MIRROR-04D-03-surface-test.apk
+          sha256sum output/MIRROR-04D-03-surface-test.apk | tee output/SHA256SUMS.txt
+
+          cat > output/BUILD-STATUS.txt <<'EOF'
+          Build: MIRROR-04D-03 Surface Test
+          Application ID: com.carassistant.next.mirror0403
+          GD01 SHA check: PASS if workflow reaches this step
+          APK build: PASS if workflow reaches this step
+          Device test: NOT RUN
+          Android Auto discovery: MUST TEST ON DEVICE
+          Surface rendering: MUST TEST ON DEVICE
+          Full phone mirroring: NOT CONFIRMED
+          Touch forwarding: NOT IMPLEMENTED
+          MediaProjection consent: USER APPROVAL REQUIRED
+          EOF
+
+          cat output/BUILD-STATUS.txt
+
+      - name: Upload APK and diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-04D-03-Surface-Test
+          path: |
+            output/MIRROR-04D-03-surface-test.apk
+            output/SHA256SUMS.txt
+            output/BUILD-STATUS.txt
+          if-no-files-found: error
+          retention-days: 14
