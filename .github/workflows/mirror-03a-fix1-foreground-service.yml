@@ -1,0 +1,625 @@
+name: MIRROR-03A Fix1 - MediaProjection Foreground Service
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-03a-fix1-foreground-service
+  cancel-in-progress: false
+
+jobs:
+  build-mirror-03a-fix1:
+    name: Build and verify MIRROR-03A Fix1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Verify frozen GD01 core
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_sha() {
+            local file="$1"
+            local expected="$2"
+            local actual
+            test -f "$file" || {
+              echo "::error::Missing core file: $file"
+              exit 1
+            }
+            actual="$(git hash-object "$file")"
+            echo "$file: $actual"
+            test "$actual" = "$expected" || {
+              echo "::error::GD01 CORE SHA MISMATCH: $file"
+              exit 1
+            }
+          }
+          check_sha \
+            "app/src/main/java/com/carassistant/next/HookEntry.java" \
+            "667e759417611d6982bb110ef0583f9513db2c63"
+          check_sha \
+            "app/src/main/AndroidManifest.xml" \
+            "b23d082324e633bde63f0997e4c90b320f9b69df"
+          check_sha \
+            "app/build.gradle" \
+            "7be503b5df091734ea6babd3b0108e220272207b"
+          echo "GD01 CORE SHA CHECK: PASS"
+
+      - name: Create isolated MIRROR-03A Fix1 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mirror03a/app/src/main/java/com/carassistant/next/mirror03a
+          mkdir -p mirror03a/app/src/main/res/values
+
+          cat > mirror03a/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Mirror03ACaptureFix1"
+          include(":app")
+          EOF
+
+          cat > mirror03a/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > mirror03a/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > mirror03a/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.carassistant.next.mirror03a'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.carassistant.next.mirror03a'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 4
+                  versionName '1.0.4-mirror03a-fix1'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > mirror03a/app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">MIRROR-03A Fix1 Capture Test</string>
+          </resources>
+          EOF
+
+          cat > mirror03a/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".Mirror03AActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".Mirror03AProjectionService"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection" />
+              </application>
+          </manifest>
+          EOF
+
+          cat > mirror03a/app/src/main/java/com/carassistant/next/mirror03a/Mirror03AProjectionService.java <<'EOF'
+          package com.carassistant.next.mirror03a;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.content.pm.ServiceInfo;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.util.Log;
+
+          public final class Mirror03AProjectionService extends Service {
+              private static final String TAG = "MIRROR03A";
+              private static final String CHANNEL_ID = "mirror03a_projection";
+              private static final int NOTIFICATION_ID = 304;
+              public static final String ACTION_READY = "com.carassistant.next.mirror03a.ACTION_FGS_READY";
+              public static final String ACTION_FAILED = "com.carassistant.next.mirror03a.ACTION_FGS_FAILED";
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  createNotificationChannel();
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  try {
+                      Notification notification = buildNotification();
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          startForeground(
+                                  NOTIFICATION_ID,
+                                  notification,
+                                  ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+                      } else {
+                          startForeground(NOTIFICATION_ID, notification);
+                      }
+                      Log.i(TAG, "FOREGROUND_SERVICE_READY type=mediaProjection");
+                      sendStatusBroadcast(ACTION_READY);
+                  } catch (Throwable error) {
+                      Log.e(TAG, "FOREGROUND_SERVICE_START_FAILED", error);
+                      sendStatusBroadcast(ACTION_FAILED);
+                      stopSelf();
+                  }
+                  return START_NOT_STICKY;
+              }
+
+              private void sendStatusBroadcast(String action) {
+                  Intent result = new Intent(action);
+                  result.setPackage(getPackageName());
+                  sendBroadcast(result);
+              }
+
+              private void createNotificationChannel() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel channel = new NotificationChannel(
+                              CHANNEL_ID,
+                              "MIRROR-03A screen capture",
+                              NotificationManager.IMPORTANCE_LOW);
+                      channel.setDescription(
+                              "Notification shown while screen capture is running");
+                      NotificationManager manager = getSystemService(NotificationManager.class);
+                      if (manager != null) {
+                          manager.createNotificationChannel(channel);
+                      }
+                  }
+              }
+
+              private Notification buildNotification() {
+                  Notification.Builder builder;
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      builder = new Notification.Builder(this, CHANNEL_ID);
+                  } else {
+                      builder = new Notification.Builder(this);
+                  }
+                  return builder
+                          .setSmallIcon(android.R.drawable.ic_menu_camera)
+                          .setContentTitle("MIRROR-03A Fix1")
+                          .setContentText("MediaProjection capture is running")
+                          .setOngoing(true)
+                          .build();
+              }
+
+              @Override
+              public void onDestroy() {
+                  stopForeground(true);
+                  super.onDestroy();
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+          }
+          EOF
+
+          cat > mirror03a/app/src/main/java/com/carassistant/next/mirror03a/Mirror03AActivity.java <<'EOF'
+          package com.carassistant.next.mirror03a;
+
+          import android.app.Activity;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.IntentFilter;
+          import android.graphics.PixelFormat;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.media.Image;
+          import android.media.ImageReader;
+          import android.media.projection.MediaProjection;
+          import android.media.projection.MediaProjectionManager;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.util.DisplayMetrics;
+          import android.util.Log;
+          import android.view.WindowManager;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public final class Mirror03AActivity extends Activity {
+              private static final String TAG = "MIRROR03A";
+              private static final int REQUEST_CAPTURE = 301;
+              private final Handler handler = new Handler(Looper.getMainLooper());
+              private TextView status;
+              private MediaProjection projection;
+              private VirtualDisplay virtualDisplay;
+              private ImageReader imageReader;
+              private int frameCount = 0;
+              private int pendingResultCode;
+              private Intent pendingResultData;
+              private BroadcastReceiver serviceReceiver;
+              private boolean receiverRegistered = false;
+              private boolean serviceReady = false;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(24, 24, 24, 24);
+
+                  TextView title = new TextView(this);
+                  title.setText("MIRROR-03A Fix1\nMediaProjection Capture Test");
+                  title.setTextSize(22);
+                  root.addView(title);
+
+                  status = new TextView(this);
+                  status.setTextSize(16);
+                  status.setText("READY — Chua cap quyen chup man hinh");
+                  LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, 0, 1);
+                  statusParams.topMargin = 24;
+                  root.addView(status, statusParams);
+
+                  Button start = new Button(this);
+                  start.setText("1. Bat dau thu chup man hinh");
+                  start.setOnClickListener(view -> requestCapture());
+                  root.addView(start);
+
+                  Button stop = new Button(this);
+                  stop.setText("2. Dung chup man hinh");
+                  stop.setOnClickListener(view -> stopCapture());
+                  root.addView(stop);
+
+                  setContentView(root);
+                  Log.i(TAG, "ACTIVITY_READY package=" + getPackageName());
+              }
+
+              private void requestCapture() {
+                  if (projection != null) {
+                      setStatus("CAPTURE DANG CHAY");
+                      return;
+                  }
+                  if (pendingResultData != null || receiverRegistered) {
+                      setStatus("FGS_STARTING — Vui long doi...");
+                      return;
+                  }
+                  try {
+                      MediaProjectionManager manager = (MediaProjectionManager) getSystemService(
+                              Context.MEDIA_PROJECTION_SERVICE);
+                      Log.i(TAG, "REQUESTING_MEDIA_PROJECTION");
+                      startActivityForResult(
+                              manager.createScreenCaptureIntent(), REQUEST_CAPTURE);
+                  } catch (Throwable error) {
+                      Log.e(TAG, "CAPTURE_REQUEST_FAILED", error);
+                      setStatus("CAPTURE_REQUEST_FAILED: " + error);
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(
+                      int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode != REQUEST_CAPTURE) {
+                      return;
+                  }
+                  if (resultCode != RESULT_OK || data == null) {
+                      Log.w(TAG, "CAPTURE_PERMISSION_DENIED_OR_CANCELLED");
+                      setStatus("DA TU CHOI HOAC HUY QUYEN");
+                      return;
+                  }
+                  pendingResultCode = resultCode;
+                  pendingResultData = data;
+                  serviceReady = false;
+                  setStatus("FGS_STARTING — Dang khoi tao foreground service...");
+
+                  try {
+                      serviceReceiver = new BroadcastReceiver() {
+                          @Override
+                          public void onReceive(Context context, Intent intent) {
+                              String action = intent.getAction();
+                              if (Mirror03AProjectionService.ACTION_FAILED.equals(action)) {
+                                  unregisterServiceReceiver();
+                                  pendingResultData = null;
+                                  setStatus("FOREGROUND_SERVICE_START_FAILED");
+                                  return;
+                              }
+                              if (Mirror03AProjectionService.ACTION_READY.equals(action)) {
+                                  unregisterServiceReceiver();
+                                  serviceReady = true;
+                                  Intent approvedData = pendingResultData;
+                                  int approvedCode = pendingResultCode;
+                                  pendingResultData = null;
+                                  if (approvedData == null) {
+                                      setStatus("FGS_READY_BUT_CAPTURE_DATA_MISSING");
+                                      return;
+                                  }
+                                  startCapture(approvedCode, approvedData);
+                              }
+                          }
+                      };
+
+                      IntentFilter filter = new IntentFilter();
+                      filter.addAction(Mirror03AProjectionService.ACTION_READY);
+                      filter.addAction(Mirror03AProjectionService.ACTION_FAILED);
+                      if (Build.VERSION.SDK_INT >= 33) {
+                          registerReceiver(serviceReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+                      } else {
+                          registerReceiver(serviceReceiver, filter);
+                      }
+                      receiverRegistered = true;
+
+                      Intent serviceIntent = new Intent(this, Mirror03AProjectionService.class);
+                      startService(serviceIntent);
+                  } catch (Throwable error) {
+                      Log.e(TAG, "FOREGROUND_SERVICE_START_FAILED", error);
+                      unregisterServiceReceiver();
+                      pendingResultData = null;
+                      setStatus("FOREGROUND_SERVICE_START_FAILED: " + error);
+                  }
+              }
+
+              private void startCapture(int resultCode, Intent data) {
+                  try {
+                      if (!serviceReady) {
+                          throw new IllegalStateException(
+                                  "Foreground service has not reported READY");
+                      }
+
+                      WindowManager windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      DisplayMetrics metrics = new DisplayMetrics();
+                      windowManager.getDefaultDisplay().getRealMetrics(metrics);
+                      int width = Math.max(1, metrics.widthPixels);
+                      int height = Math.max(1, metrics.heightPixels);
+                      int density = metrics.densityDpi;
+
+                      MediaProjectionManager manager = (MediaProjectionManager) getSystemService(
+                              Context.MEDIA_PROJECTION_SERVICE);
+                      
+                      projection = manager.getMediaProjection(resultCode, data);
+                      if (projection == null) {
+                          throw new IllegalStateException("MediaProjection is null");
+                      }
+
+                      projection.registerCallback(
+                              new MediaProjection.Callback() {
+                                  @Override
+                                  public void onStop() {
+                                      Log.w(TAG, "PROJECTION_STOPPED_BY_SYSTEM");
+                                      handler.post(() -> cleanup(false));
+                                  }
+                              }, handler);
+
+                      frameCount = 0;
+                      imageReader = ImageReader.newInstance(
+                              width, height, PixelFormat.RGBA_8888, 3);
+                      imageReader.setOnImageAvailableListener(reader -> {
+                          Image image = null;
+                          try {
+                              image = reader.acquireLatestImage();
+                              if (image == null) {
+                                  return;
+                              }
+                              frameCount++;
+                              int imageWidth = image.getWidth();
+                              int imageHeight = image.getHeight();
+                              if (frameCount == 1 || frameCount % 30 == 0) {
+                                  Log.i(
+                                          TAG,
+                                          "FRAME_OK count=" + frameCount + " size=" + imageWidth + "x" + imageHeight + " planes=" + image.getPlanes().length);
+                                  setStatus(
+                                          "CAPTURE DANG CHAY\n" +
+                                          "FRAME_OK: " + frameCount + "\n" +
+                                          "Kich thuoc: " + imageWidth + " x " + imageHeight + "\nHay giu ung dung mo khi kiem tra.");
+                              }
+                          } catch (Throwable error) {
+                              Log.e(TAG, "FRAME_READ_FAILED", error);
+                              setStatus("FRAME_READ_FAILED: " + error);
+                          } finally {
+                              if (image != null) {
+                                  image.close();
+                              }
+                          }
+                      }, handler);
+
+                      virtualDisplay = projection.createVirtualDisplay(
+                              "MIRROR-03A-Fix1-Capture",
+                              width, height, density,
+                              DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                              imageReader.getSurface(), null, handler);
+
+                      if (virtualDisplay == null) {
+                          throw new IllegalStateException("VirtualDisplay is null");
+                      }
+
+                      Log.i(
+                              TAG,
+                              "CAPTURE_STARTED size=" + width + "x" + height + " density=" + density);
+                      setStatus(
+                              "CAPTURE_STARTED\n" +
+                              "Man hinh: " + width + " x " + height + "\nDang doi khung hinh...");
+                  } catch (Throwable error) {
+                      Log.e(TAG, "CAPTURE_START_FAILED", error);
+                      setStatus("CAPTURE_START_FAILED: " + error);
+                      cleanup(true);
+                  }
+              }
+
+              private void setStatus(String message) {
+                  handler.post(() -> {
+                      if (status != null) {
+                          status.setText(message);
+                      }
+                  });
+              }
+
+              private void unregisterServiceReceiver() {
+                  if (receiverRegistered && serviceReceiver != null) {
+                      try {
+                          unregisterReceiver(serviceReceiver);
+                      } catch (Throwable ignored) {
+                      }
+                  }
+                  receiverRegistered = false;
+                  serviceReceiver = null;
+              }
+
+              private void stopCapture() {
+                  pendingResultData = null;
+                  unregisterServiceReceiver();
+                  cleanup(true);
+              }
+
+              private void cleanup(boolean stopProjection) {
+                  MediaProjection oldProjection = projection;
+                  projection = null;
+
+                  if (virtualDisplay != null) {
+                      try {
+                          virtualDisplay.release();
+                      } catch (Throwable ignored) {
+                      }
+                      virtualDisplay = null;
+                  }
+
+                  if (imageReader != null) {
+                      try {
+                          imageReader.setOnImageAvailableListener(null, null);
+                      } catch (Throwable ignored) {
+                      }
+                      try {
+                          imageReader.close();
+                      } catch (Throwable ignored) {
+                      }
+                      imageReader = null;
+                  }
+
+                  if (stopProjection && oldProjection != null) {
+                      try {
+                          oldProjection.stop();
+                      } catch (Throwable ignored) {
+                      }
+                  }
+
+                  try {
+                      stopService(
+                              new Intent(this, Mirror03AProjectionService.class));
+                  } catch (Throwable ignored) {
+                  }
+
+                  serviceReady = false;
+                  if (status != null) {
+                      status.setText("STOPPED — Da dung chup man hinh");
+                  }
+                  Log.i(TAG, "CAPTURE_STOPPED frames=" + frameCount);
+              }
+
+              @Override
+              protected void onDestroy() {
+                  pendingResultData = null;
+                  unregisterServiceReceiver();
+                  cleanup(true);
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mirror03a
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Verify APK and generate SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="mirror03a/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p out
+          cp "$APK" out/MIRROR-03A-Fix1-Capture.apk
+          sha256sum out/MIRROR-03A-Fix1-Capture.apk \
+            | tee out/MIRROR-03A-Fix1-SHA256.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+            out/MIRROR-03A-Fix1-Capture.apk \
+            | tee out/MIRROR-03A-Fix1-badging.txt
+          grep -q "com.carassistant.next.mirror03a" \
+            out/MIRROR-03A-Fix1-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree \
+            out/MIRROR-03A-Fix1-Capture.apk AndroidManifest.xml \
+            > out/MIRROR-03A-Fix1-manifest.txt
+          grep -q "FOREGROUND_SERVICE" \
+            out/MIRROR-03A-Fix1-manifest.txt
+          grep -q "mediaProjection" \
+            out/MIRROR-03A-Fix1-manifest.txt
+          echo "MIRROR-03A FIX1 APK CHECK: PASS"
+
+      - name: Upload Fix1 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-03A-Fix1-FGS
+          path: |
+            out/MIRROR-03A-Fix1-Capture.apk
+            out/MIRROR-03A-Fix1-SHA256.txt
+            out/MIRROR-03A-Fix1-badging.txt
+            out/MIRROR-03A-Fix1-manifest.txt
+          if-no-files-found: error
+          retention-days: 14
