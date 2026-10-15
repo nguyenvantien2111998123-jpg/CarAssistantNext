@@ -1,0 +1,325 @@
+name: MIRROR-AAD-01 - AADisplay Architecture Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-aad-01-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Verify frozen CarAssistantNext CORE
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_sha() {
+            file="$1"
+            expected="$2"
+            test -f "$file" || { echo "::error::Missing protected file: $file"; exit 1; }
+            actual="$(git hash-object "$file")"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Protected SHA mismatch: $file"
+              echo "Expected: $expected"
+              echo "Actual:   $actual"
+              exit 1
+            fi
+            echo "CORE_SHA_PASS $file $actual"
+          }
+          check_sha app/src/main/java/com/carassistant/next/HookEntry.java 667e759417611d6982bb110ef0583f9513db2c63
+          check_sha app/src/main/AndroidManifest.xml b23d082324e633bde63f0997e4c90b320f9b69df
+          check_sha app/build.gradle 7be503b5df091734ea6babd3b0108e220272207b
+          check_sha .github/workflows/mirror-04d-04-low-latency.yml c41eb33d7fd459f0ab4e2d7789b1a200305584ef
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Generate isolated LSPosed probe module
+        shell: bash
+        run: |
+          set -euo pipefail
+          P=mirror-aad-01
+          SRC="$P/app/src/main/java/com/carassistant/next/aad01"
+          ASSETS="$P/app/src/main/assets"
+          mkdir -p "$SRC" "$ASSETS"
+
+          cat > "$P/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MIRROR-AAD-01"
+          include(":app")
+          EOF
+
+          cat > "$P/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > "$P/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > "$P/app/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.carassistant.next.aad01'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.carassistant.next.aad01'
+                  minSdk 29
+                  targetSdk 32
+                  versionCode 1
+                  versionName 'AAD-01-probe'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              compileOnly 'de.robv.android.xposed:api:82'
+          }
+          EOF
+
+          cat > "$P/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="MIRROR AAD-01 Probe"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <meta-data android:name="xposedmodule" android:value="true" />
+                  <meta-data android:name="xposeddescription" android:value="AADisplay architecture probe; logs display creation and launch-on-display decisions only." />
+                  <meta-data android:name="xposedminversion" android:value="82" />
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$ASSETS/xposed_init" <<'EOF'
+          com.carassistant.next.aad01.HookEntry
+          EOF
+
+          cat > "$SRC/HookEntry.java" <<'EOF'
+          package com.carassistant.next.aad01;
+
+          import android.os.Build;
+          import de.robv.android.xposed.IXposedHookLoadPackage;
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+          import java.lang.reflect.Method;
+          import java.util.Arrays;
+
+          public final class HookEntry implements IXposedHookLoadPackage {
+              private static final String TAG = "MIRROR_AAD01";
+
+              private static void log(String message) {
+                  XposedBridge.log(TAG + ": " + message);
+              }
+
+              @Override
+              public void handleLoadPackage(XC_LoadPackage.LoadPackageParam p) {
+                  try {
+                      if ("android".equals(p.packageName) && p.appInfo == null) {
+                          log("SYSTEM_SERVER_LOADED sdk=" + Build.VERSION.SDK_INT
+                                  + " fingerprint=" + Build.FINGERPRINT);
+                          hookLaunchPermission(p.classLoader);
+                          hookDisplayCreation(p.classLoader);
+                      } else if ("com.google.android.projection.gearhead".equals(p.packageName)) {
+                          log("GEARHEAD_LOADED process=" + p.processName
+                                  + " version=" + (p.appInfo == null ? "unknown" : p.appInfo.packageName));
+                      }
+                  } catch (Throwable t) {
+                      log("INIT_ERROR package=" + p.packageName + " error=" + t);
+                  }
+              }
+
+              private void hookLaunchPermission(ClassLoader loader) {
+                  try {
+                      final Class<?> cls = XposedHelpers.findClassIfExists(
+                              "com.android.server.wm.ActivityTaskSupervisor", loader);
+                      if (cls == null) {
+                          log("LAUNCH_CHECK_CLASS_MISSING ActivityTaskSupervisor");
+                          return;
+                      }
+                      int count = 0;
+                      for (Method m : cls.getDeclaredMethods()) {
+                          if (!"isCallerAllowedToLaunchOnDisplay".equals(m.getName())
+                                  || m.getParameterTypes().length != 4) continue;
+                          XposedBridge.hookMethod(m, new XC_MethodHook() {
+                              @Override
+                              protected void afterHookedMethod(MethodHookParam param) {
+                                  try {
+                                      log("LAUNCH_CHECK callerPid=" + param.args[0]
+                                              + " callerUid=" + param.args[1]
+                                              + " displayId=" + param.args[2]
+                                              + " activityInfo=" + (param.args[3] == null ? "null"
+                                              : param.args[3].getClass().getName())
+                                              + " result=" + param.getResult());
+                                  } catch (Throwable t) {
+                                      log("LAUNCH_CHECK_LOG_ERROR " + t);
+                                  }
+                              }
+                          });
+                          count++;
+                      }
+                      log("LAUNCH_CHECK_HOOKS=" + count);
+                  } catch (Throwable t) {
+                      log("LAUNCH_CHECK_HOOK_ERROR " + t);
+                  }
+              }
+
+              private void hookDisplayCreation(ClassLoader loader) {
+                  try {
+                      final Class<?> cls = XposedHelpers.findClassIfExists(
+                              "com.android.server.display.DisplayManagerService", loader);
+                      if (cls == null) {
+                          log("DISPLAY_SERVICE_CLASS_MISSING");
+                          return;
+                      }
+                      int count = 0;
+                      for (Method m : cls.getDeclaredMethods()) {
+                          String n = m.getName().toLowerCase();
+                          if (!n.contains("createvirtualdisplay")) continue;
+                          XposedBridge.hookMethod(m, new XC_MethodHook() {
+                              @Override
+                              protected void beforeHookedMethod(MethodHookParam param) {
+                                  try {
+                                      log("CREATE_VIRTUAL_DISPLAY method=" + param.method
+                                              + " args=" + safeArgs(param.args));
+                                  } catch (Throwable t) {
+                                      log("CREATE_VIRTUAL_DISPLAY_LOG_ERROR " + t);
+                                  }
+                              }
+
+                              @Override
+                              protected void afterHookedMethod(MethodHookParam param) {
+                                  try {
+                                      Object result = param.getResult();
+                                      log("CREATE_VIRTUAL_DISPLAY_RETURN method="
+                                              + param.method.getName()
+                                              + " resultType=" + (result == null ? "null"
+                                              : result.getClass().getName())
+                                              + " throwable=" + param.getThrowable());
+                                  } catch (Throwable t) {
+                                      log("CREATE_VIRTUAL_DISPLAY_RETURN_LOG_ERROR " + t);
+                                  }
+                              }
+                          });
+                          count++;
+                      }
+                      log("DISPLAY_CREATE_HOOKS=" + count);
+                  } catch (Throwable t) {
+                      log("DISPLAY_CREATE_HOOK_ERROR " + t);
+                  }
+              }
+
+              private static String safeArgs(Object[] args) {
+                  if (args == null) return "null";
+                  StringBuilder out = new StringBuilder("[");
+                  for (int i = 0; i < args.length; i++) {
+                      if (i > 0) out.append(", ");
+                      Object a = args[i];
+                      if (a == null) out.append("null");
+                      else if (a instanceof String || a instanceof Number
+                              || a instanceof Boolean || a instanceof Integer) out.append(a);
+                      else out.append(a.getClass().getName());
+                  }
+                  return out.append("]").toString();
+              }
+          }
+          EOF
+
+      - name: Build isolated module
+        working-directory: mirror-aad-01
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Verify module outputs and create report
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="mirror-aad-01/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p mirror-aad-01-report
+          cp "$APK" mirror-aad-01-report/MIRROR-AAD-01-probe.apk
+          sha256sum mirror-aad-01-report/MIRROR-AAD-01-probe.apk | tee mirror-aad-01-report/SHA256SUMS.txt
+          cat > mirror-aad-01-report/README.txt <<'EOF'
+          MIRROR-AAD-01 - AADisplay Architecture Probe
+
+          Purpose:
+          - Independent LSPosed diagnostic module for Android 12 / PixelOS.
+          - Logs System Server loading.
+          - Logs calls to DisplayManagerService methods named createVirtualDisplay.
+          - Logs ActivityTaskSupervisor.isCallerAllowedToLaunchOnDisplay decisions.
+          - Logs Android Auto Gearhead process loading.
+
+          This is a diagnostic probe, NOT a completed AADisplay implementation.
+          It does not create a VirtualDisplay, acquire Android Auto's Surface,
+          forward touch events, auto-approve MediaProjection, or persist consent.
+          No CarAssistantNext CORE files or existing MIRROR workflows are modified.
+
+          Test:
+          1. Install APK.
+          2. Enable MIRROR AAD-01 Probe in LSPosed.
+          3. Scope it to System Framework and Android Auto.
+          4. Reboot the phone.
+          5. Connect Android Auto and open the existing MIRROR app.
+          6. Capture LSPosed logs filtered by MIRROR_AAD01.
+          7. Check for SYSTEM_SERVER_LOADED, DISPLAY_CREATE_HOOKS,
+             CREATE_VIRTUAL_DISPLAY, LAUNCH_CHECK, and GEARHEAD_LOADED.
+          EOF
+
+      - name: Upload probe APK and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIRROR-AAD-01-probe
+          path: mirror-aad-01-report/
+          if-no-files-found: error
