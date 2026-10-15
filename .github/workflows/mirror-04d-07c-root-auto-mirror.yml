@@ -82,7 +82,7 @@ jobs:
           marker = "- name: Generate isolated 06A project from frozen 04D-04 source"
           if workflow.count(marker) != 1:
               raise SystemExit("FAIL: expected exactly one 06A generator step")
-                   step_start = workflow.index(marker)
+          step_start = workflow.index(marker)
 
           import re
 
