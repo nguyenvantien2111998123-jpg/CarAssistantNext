@@ -82,15 +82,23 @@ jobs:
           marker = "- name: Generate isolated 06A project from frozen 04D-04 source"
           if workflow.count(marker) != 1:
               raise SystemExit("FAIL: expected exactly one 06A generator step")
-          step_start = workflow.index(marker)
-          heredoc_start = workflow.find(" python3 - <<'PY'", step_start)
-          if heredoc_start < 0:
-              raise SystemExit("FAIL: 06A generator heredoc not found")
-          body_start = workflow.find("\n", heredoc_start) + 1
-          body_end = workflow.find("\n PY", body_start)
-          if body_end < 0:
-              raise SystemExit("FAIL: 06A generator heredoc terminator not found")
-          script = textwrap.dedent(workflow[body_start:body_end])
+                   step_start = workflow.index(marker)
+
+          import re
+
+          match = re.search(
+              r"(?m)^[ \t]*python3 - <<'PY'[ \t]*\n"
+              r"([\s\S]*?)"
+              r"^[ \t]*PY[ \t]*$",
+              workflow[step_start:],
+          )
+
+          if not match:
+              raise SystemExit(
+                  "FAIL: could not extract 06A generator Python heredoc"
+          )
+
+          script = textwrap.dedent(match.group(1))
           replacements = [
               ("mirror0406a", "mirror0407c"),
               ("MIRROR-04D-06A", "MIRROR-04D-07C"),
