@@ -305,16 +305,16 @@ jobs:
           cat > "$SRC/MirrorSession.java" <<'EOF'
           package com.carassistant.next.mirror0405;
 
+          import android.content.Intent;
+
           import androidx.car.app.Screen;
           import androidx.car.app.Session;
 
           public class MirrorSession extends Session {
 
               @Override
-              public Screen onCreateScreen(
-                  androidx.car.app.CarContext carContext
-              ) {
-                  return new MirrorScreen(carContext);
+              public Screen onCreateScreen(Intent intent) {
+              return new MirrorScreen(getCarContext());
               }
           }
           EOF
