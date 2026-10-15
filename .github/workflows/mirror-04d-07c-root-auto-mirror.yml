@@ -122,30 +122,46 @@ jobs:
           if not java_file.is_file():
               raise SystemExit("FAIL: generated connection monitor missing")
           source = java_file.read_text(encoding="utf-8")
-          pattern = re.compile(
-              r"(?ms)^([ \t]*)private void launchConsentActivity\(\) \{"
-              r".*?^([ \t]*)\}\n(?=[ \t]*private Notification buildNotification)"
-          )
-          replacement = r'''
-              private void launchConsentActivity() {
+          
+          start_marker = "              private void launchConsentActivity() {"
+          end_marker = "              private Notification buildNotification(String text) {"
+
+          if source.count(start_marker) != 1:
+              raise SystemExit("FAIL: expected exactly one launchConsentActivity start")
+          if source.count(end_marker) != 1:
+              raise SystemExit("FAIL: expected exactly one buildNotification anchor")
+
+          start = source.index(start_marker)
+          end = source.index(end_marker, start)
+
+          replacement = """              private void launchConsentActivity() {
                   String appops = runRoot(
                       "appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow"
                       + " && appops get com.carassistant.next.mirror0407c PROJECT_MEDIA");
-                  if (appops.contains("ROOT_COMMAND_FAILED") || appops.contains("ROOT_COMMAND_TIMEOUT") || appops.contains("ROOT_UNAVAILABLE:")) {
+                  if (appops.contains("ROOT_COMMAND_FAILED")
+                          || appops.contains("ROOT_COMMAND_TIMEOUT")
+                          || appops.contains("ROOT_UNAVAILABLE:")) {
                       status = "AA_CONNECTED_APPOPS_FAILED";
                       return;
                   }
                   String result = runRoot(
                       "am start -n com.carassistant.next.mirror0407c/.MainActivity"
                       + " --ez auto_capture true");
-                  status = result.contains("ROOT_COMMAND_FAILED") || result.contains("ROOT_COMMAND_TIMEOUT") || result.contains("ROOT_UNAVAILABLE:")
+                  status = result.contains("ROOT_COMMAND_FAILED")
+                          || result.contains("ROOT_COMMAND_TIMEOUT")
+                          || result.contains("ROOT_UNAVAILABLE:")
                       ? "AA_CONNECTED_ACTIVITY_LAUNCH_FAILED"
                       : "AA_CONNECTED_APPOPS_SET_AND_CONSENT_REQUESTED";
               }
-          '''
-          patched, count = pattern.subn( lambda m: replacement, source, count=1 )
-          if count != 1:
-              raise SystemExit( "FAIL: launchConsentActivity anchor mismatch; refusing to patch" )
+
+          """
+
+          patched = source[:start] + replacement + source[end:]
+          if patched.count("appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow") != 1:
+              raise SystemExit("FAIL: expected exactly one AppOps insertion")
+
+          java_file.write_text(patched, encoding="utf-8")
+
           if patched.count("appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow") != 1:
               raise SystemExit("FAIL: expected exactly one AppOps insertion")
           java_file.write_text(patched, encoding="utf-8")
