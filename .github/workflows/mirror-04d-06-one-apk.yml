@@ -31,7 +31,7 @@ jobs:
             local file="$1"
             local expected="$2"
             test -f "$file"
-            actual="$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(git hash-object "$file")"
             if [ "$actual" != "$expected" ]; then
               echo "::error::Protected file SHA mismatch: $file"
               echo "Expected: $expected"
