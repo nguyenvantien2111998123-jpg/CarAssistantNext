@@ -1,3 +1,4 @@
+
 name: MIRROR-04D-05 - Consent Auto-Launch Test
 
 on:
@@ -228,7 +229,7 @@ jobs:
                   status = new TextView(this);
                   status.setTextSize(18);
                   status.setText(
-                      "MIRROR-04D-05\\n" +
+                      "MIRROR-04D-05\n" +
                       "Dang yeu cau xac nhan MediaProjection..."
                   );
                   layout.addView(status);
@@ -269,8 +270,8 @@ jobs:
 
                   if (resultCode == RESULT_OK && data != null) {
                       status.setText(
-                          "CONSENT_GRANTED\\n" +
-                          "Nguoi dung da dong y.\\n" +
+                          "CONSENT_GRANTED\n" +
+                          "Nguoi dung da dong y.\n" +
                           "Ban kiem thu nay chua khoi dong dich vu chieu."
                       );
                   } else {
@@ -318,6 +319,7 @@ jobs:
           }
           EOF
 
+          cat > "$SRC/MirrorScreen.java" <<'EOF'
           package com.carassistant.next.mirror0405;
 
           import android.content.Intent;
@@ -330,41 +332,42 @@ jobs:
 
           public class MirrorScreen extends Screen {
 
-          public MirrorScreen(CarContext context) {
-               super(context);
-          }
+              public MirrorScreen(CarContext context) {
+                  super(context);
+              }
 
-          @Override
-          public Template onGetTemplate() {
-              Action open = new Action.Builder()
-            .setTitle("Open consent test")
-            .setOnClickListener(() -> {
-                Intent intent = new Intent(
-                    getCarContext(),
-                    MainActivity.class
-                );
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+              @Override
+              public Template onGetTemplate() {
+                  Action open = new Action.Builder()
+                      .setTitle("Open consent test")
+                      .setOnClickListener(() -> {
+                          Intent intent = new Intent(
+                              getCarContext(),
+                              MainActivity.class
+                          );
+                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-                try {
-                    getCarContext().startActivity(intent);
-                } catch (Exception e) {
-                    android.util.Log.e(
-                        "MIRROR0405",
-                        "Unable to launch consent Activity",
-                        e
-                    );
-                }
-            })
-            .build();
+                          try {
+                              getCarContext().startActivity(intent);
+                          } catch (Exception e) {
+                              android.util.Log.e(
+                                  "MIRROR0405",
+                                  "Unable to launch consent Activity",
+                                  e
+                              );
+                          }
+                      })
+                      .build();
 
-          return new MessageTemplate.Builder(
-            "Open the consent test on the phone."
-          )
-            .setTitle("MIRROR-04D-05")
-            .addAction(open)
-            .build();
+                  return new MessageTemplate.Builder(
+                      "Open the consent test on the phone."
+                  )
+                      .setTitle("MIRROR-04D-05")
+                      .addAction(open)
+                      .build();
+              }
           }
-          }
+          EOF
 
       - name: Validate workflow-generated Java sources
         shell: bash
