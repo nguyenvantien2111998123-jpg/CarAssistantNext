@@ -123,16 +123,31 @@ jobs:
               raise SystemExit("FAIL: generated connection monitor missing")
           source = java_file.read_text(encoding="utf-8")
           
-          start_marker = "              private void launchConsentActivity() {"
-          end_marker = "              private Notification buildNotification(String text) {"
+          import re
 
-          if source.count(start_marker) != 1:
-              raise SystemExit("FAIL: expected exactly one launchConsentActivity start")
-          if source.count(end_marker) != 1:
-              raise SystemExit("FAIL: expected exactly one buildNotification anchor")
+          start_matches = list(re.finditer(
+              r"(?m)^[ \t]*private void launchConsentActivity\(\) \{[ \t]*$",
+              source,
+          ))
+          end_matches = list(re.finditer(
+              r"(?m)^[ \t]*private Notification buildNotification\(String text\) \{[ \t]*$",
+              source,
+          ))
 
-          start = source.index(start_marker)
-          end = source.index(end_marker, start)
+          if len(start_matches) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one launchConsentActivity method"
+              )
+          if len(end_matches) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one buildNotification method"
+              )
+
+          start = start_matches[0].start()
+          end = end_matches[0].start()
+
+          if end <= start:
+              raise SystemExit("FAIL: invalid Java method boundaries")
 
           replacement = """              private void launchConsentActivity() {
                   String appops = runRoot(
@@ -157,13 +172,14 @@ jobs:
           """
 
           patched = source[:start] + replacement + source[end:]
-          if patched.count("appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow") != 1:
-              raise SystemExit("FAIL: expected exactly one AppOps insertion")
 
-          java_file.write_text(patched, encoding="utf-8")
+          if patched.count(
+              "appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow"
+          ) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one AppOps insertion"
+              )
 
-          if patched.count("appops set com.carassistant.next.mirror0407c PROJECT_MEDIA allow") != 1:
-              raise SystemExit("FAIL: expected exactly one AppOps insertion")
           java_file.write_text(patched, encoding="utf-8")
           manifest = project / "app/src/main/AndroidManifest.xml"
           ET.parse(manifest)
